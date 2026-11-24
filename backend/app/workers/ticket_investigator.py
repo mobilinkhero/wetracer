@@ -75,10 +75,11 @@ async def _build_triage_context(db, service: TicketService, ticket: Ticket):
     similar = []
     embedding = ticket.embedding
     if embedding is None:
-        # CPU-bound local model — keep it off the worker's event loop so
-        # concurrent runs aren't serialized behind inference.
+        # Sync hosted-API call — keep it off the worker's event loop so
+        # concurrent runs aren't serialized behind a network call.
         embedding = await asyncio.to_thread(
-            embed_ticket_text, ticket.title, ticket.description
+            embed_ticket_text, ticket.title, ticket.description,
+            org_id=ticket.organization_id,
         )
     if embedding is not None:
         for other, score in service.repo.find_similar(

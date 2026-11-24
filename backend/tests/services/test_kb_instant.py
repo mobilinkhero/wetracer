@@ -260,16 +260,26 @@ async def test_answer_truncated_to_readable_length(fake_tool):
 
 
 @pytest.mark.asyncio
-async def test_gate_requires_two_keywords_or_half_confidence(fake_tool):
-    """One shared keyword with confidence < 0.5 is below the gate; the same
-    hit passes when the caller lowers the keyword threshold to 1."""
+async def test_gate_is_confidence_only(fake_tool):
+    """The instant-answer gate is confidence >= 0.5, not a keyword count:
+    2 matched words out of 3 (0.67) passes, 2 out of 5 (0.4) does not —
+    the 0.4 case is a near miss the lean model may use as context, not an
+    answer to send verbatim."""
     # Question keywords: {cancel, subscription, refund} — only 'cancel' and
     # 'subscription' appear in the article, 'refund' does not: 2/3 = 0.67.
     _run_candidate(None, fake_tool, rendered=CANCEL_RENDERED)
     hit = await find_kb_answer("agent-1", "org-1",
                                "How do I cancel my subscription refund?")
-    assert hit is not None  # 2 matched keywords passes the default gate
+    assert hit is not None  # confidence 0.67 passes the default gate
     assert hit.confidence == pytest.approx(2 / 3)
+
+    # 2 matched keywords out of 5 (0.4) is below the gate — matched words
+    # are body-only ('time', 'settings'), so no title floor applies.
+    _run_candidate(None, fake_tool, rendered=CANCEL_RENDERED)
+    hit = await find_kb_answer(
+        "agent-1", "org-1",
+        "What time do the settings open late at night?")
+    assert hit is None
 
     # A question sharing exactly one word and < half its keywords fails.
     # (A single TITLE word no longer floors confidence to 0.6 — see

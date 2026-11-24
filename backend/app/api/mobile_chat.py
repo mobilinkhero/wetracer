@@ -14,10 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-"""Public REST Chat API for the Flutter SDK (no WebView).
+"""Public REST Chat API for mobile clients (no WebView).
 
 ``/api/v1/mobile`` — the whole mobile surface, defined in
-``~/workspace/chattermate-pgdata/flutter-sdk/API_CONTRACT.md`` (v1).
+the public mobile Chat API (see ``docs/AI-INTEGRATION.md``).
 
 Design: the mobile client is a widget visitor that talks REST instead of
 Socket.IO. Everything that decides what a visitor may do, and everything the

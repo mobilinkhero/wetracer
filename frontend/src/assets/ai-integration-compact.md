@@ -98,7 +98,7 @@
   dashboard APIs from the app; do not store FCM service-account JSON or
   AI keys in the app.
 
-## Contract corrections (code beats `API_CONTRACT.md` v1)
+## Contract corrections (code beats the earlier API contract v1)
 
 - Token lifetime 1 hour, not 30 days; `rotate` exists. FCM config is at
   `/api/v1/admin/mobile/fcm-config`, not `/api/v1/mobile/fcm-config`.

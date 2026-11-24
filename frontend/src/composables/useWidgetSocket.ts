@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 import { replyExtras } from '../webclient/panel/answer-extras'
-import { ref } from 'vue'
+import { ref, toRaw } from 'vue'
 import { io, Socket } from 'socket.io-client'
 import type { HumanAgent, SocketError } from '../types/widget'
 import { getErrorMessage, isReauthorizingRefusal, REAUTHORIZING_REFUSALS } from '../types/widget'
@@ -189,6 +189,10 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
     // The documented events are bound by default (see
     // WIDGET_STREAMING_EVENTS); bindStreamingEvents re-binds them.
     let streamingMessage: any = null
+    // A stream that failed mid-reply: its partial bubble stays visible,
+    // and the final chat_response still has a placeholder to drop (see
+    // failStream / dropStreamingPlaceholder).
+    let failedStreamingMessage: any = null
     let lastStreamSource: string | undefined = undefined
     let boundStreamingEvents: WidgetStreamingEvents | null =
         WIDGET_STREAMING_EVENTS
@@ -196,7 +200,13 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
 
     /** The stream started: open the in-progress bubble now — the first token may be seconds away. */
     const applyStreamStart = (event: WidgetStreamStart) => {
-        if (streamingMessage) return
+        if (streamingMessage) {
+            // A new turn started while the previous reply was still
+            // streaming: the old bubble keeps the text it got and stops
+            // growing, and the new turn opens its own bubble — turn 2's
+            // tokens must never append to turn 1's bubble.
+            streamingMessage.liveStream = false
+        }
         stopBotTyping()
         streamingMessage = {
             ...(typeof event.messageId === 'number' ? { id: event.messageId } : {}),
@@ -270,26 +280,42 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
      * is real reply content); the typing dots come back while the
      * complete reply is awaited through the normal `chat_response`
      * path, instead of an error banner for a reply that may still
-     * arrive in full.
+     * arrive in full. The failed bubble is kept aside so that final
+     * reply can still drop it — otherwise the partial and the
+     * complete reply would both show.
      */
     const failStream = (_error: string) => {
         const message = streamingMessage
         streamingMessage = null
         isLiveStreaming.value = false
-        if (message) message.liveStream = false
+        if (message) {
+            message.liveStream = false
+            failedStreamingMessage = message
+        }
         startBotTyping()
     }
 
-    /** Drop the streaming placeholder: a complete reply supersedes it. */
-    const dropStreamingPlaceholder = () => {
-        if (!streamingMessage) return
+    /**
+     * Drop the streaming placeholder: a complete reply supersedes it.
+     * Returns true when a placeholder (live, or a failed stream's
+     * partial) was dropped, so the final reply knows it was already
+     * watched live and must not be re-revealed word by word.
+     */
+    const dropStreamingPlaceholder = (): boolean => {
+        const target = streamingMessage ?? failedStreamingMessage
+        if (!target) return false
         // The final chat_response carries no source; the stream that
         // produced it does, so the reply keeps its "from help article"
         // label after finalisation.
-        lastStreamSource = streamingMessage.source
-        messages.value = messages.value.filter((m: any) => m !== streamingMessage)
+        lastStreamSource = target.source
+        // messages is a reactive ref, so its elements are Vue proxies:
+        // identity against the raw streaming object never matches.
+        // Compare the raw objects (see useTypewriter.ts).
+        messages.value = messages.value.filter((m: any) => toRaw(m) !== target)
         streamingMessage = null
+        failedStreamingMessage = null
         isLiveStreaming.value = false
+        return true
     }
 
     /** Subscribe to the streaming events named by docs/STREAMING-PROTOCOL.md — call only with the documented names. */
@@ -460,6 +486,17 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
             // Nothing can arrive to clear it while we are disconnected.
             stopBotTyping()
 
+            // A reply cut off mid-stream never finalises: drop its live
+            // bubble, or it stays live forever and a later turn's tokens
+            // append to it. A failed stream's partial stays visible, but
+            // no later chat_response belongs to it any more.
+            if (streamingMessage) {
+                messages.value = messages.value.filter((m: any) => toRaw(m) !== streamingMessage)
+                streamingMessage = null
+                isLiveStreaming.value = false
+            }
+            failedStreamingMessage = null
+
             if (connectionStatus.value === 'connected') {
                 console.log('Socket disconnected, setting connection status to connecting')
                 connectionStatus.value = 'connecting'
@@ -522,8 +559,10 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
             stopBotTyping() // the reply we were waiting for has arrived
             // A complete reply supersedes a streaming bubble (same
             // reply, delivered whole): drop the placeholder first, or
-            // the reply would show twice.
-            dropStreamingPlaceholder()
+            // the reply would show twice. A reply that was already
+            // watched live must not be re-revealed word by word by
+            // the typewriter, so it is pushed with stream: false.
+            const wasStreamed = dropStreamingPlaceholder()
             // Capture session_id from response for file attachments
             if (data.session_id) {
                 console.log('Captured session_id from chat_response:', data.session_id)
@@ -542,7 +581,7 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
                     created_at: new Date().toISOString(),
                     session_id: '',
                     agent_name: data.agent_name,
-                    stream: true, // live reply → client-side typewriter reveal
+                    stream: !wasStreamed, // live reply → client-side typewriter reveal
                     attributes: {
                         end_chat: data.end_chat,
                         end_chat_reason: data.end_chat_reason,
@@ -592,7 +631,7 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
                     created_at: new Date().toISOString(),
                     session_id: '',
                     agent_name: data.agent_name,
-                    stream: true, // live reply → client-side typewriter reveal
+                    stream: !wasStreamed, // live reply → client-side typewriter reveal
                     // A streamed reply's source (e.g. `kb`) survives
                     // finalisation so the "from help article" label stays.
                     ...(lastStreamSource ? { source: lastStreamSource } : {}),
@@ -1039,6 +1078,11 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
         // A reply in flight never lands once the session closes, so the typing
         // indicator would spin forever over an empty chat.
         stopBotTyping()
+        // Same for a stream in flight: its bubble is gone with the
+        // transcript, so nothing may still point at it.
+        streamingMessage = null
+        failedStreamingMessage = null
+        isLiveStreaming.value = false
         currentForm.value = null
     }
 

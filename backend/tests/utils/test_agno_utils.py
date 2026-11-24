@@ -381,20 +381,17 @@ class TestCreateModel:
             )
             assert result == mock_model
 
-    def test_create_model_ollama(self):
-        """Test creating Ollama model (no API key needed)"""
-        with patch("agno.models.ollama.Ollama") as mock_ollama:
-            mock_model = MagicMock()
-            mock_ollama.return_value = mock_model
-            
-            result = agno_utils.create_model(
+    def test_create_model_ollama_unsupported(self):
+        """OLLAMA was removed: no self-hosted/local model is supported anymore,
+        so creating one must fail instead of building an Ollama model."""
+        with pytest.raises(HTTPException) as excinfo:
+            agno_utils.create_model(
                 model_type="OLLAMA",
                 api_key="not-needed",
                 model_name="llama2"
             )
-            
-            mock_ollama.assert_called_once_with(id="llama2")
-            assert result == mock_model
+        assert excinfo.value.status_code == 500
+        assert "OLLAMA" in excinfo.value.detail
 
     def test_create_model_xai(self):
         """Test creating xAI model"""

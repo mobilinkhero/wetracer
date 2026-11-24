@@ -248,7 +248,7 @@ class FAQGeneratorAgent:
                 # provider-agnostic plain-JSON path rather than failing the batch.
                 logger.warning(f"Groq FAQ json tool call failed ({arun_exc}); falling back to plain-JSON extraction")
                 return await self._extract_plain_json(instructions, message)
-            # Some providers (Ollama/HuggingFace/Mistral via agno) fail on
+            # Some providers (HuggingFace/Mistral via agno) fail on
             # native structured outputs — retry once with a plain-JSON prompt.
             logger.warning(
                 f"Native structured output failed for {self.model_type}/{self.model_name} "

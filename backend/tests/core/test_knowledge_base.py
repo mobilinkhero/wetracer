@@ -59,7 +59,8 @@ def knowledge_manager(mock_db, mock_vector_db):
     with patch('app.knowledge.knowledge_base.SessionLocal') as mock_session_local, \
          patch('app.knowledge.knowledge_base.OptimizedPgVector') as mock_pg_vector, \
          patch('app.knowledge.knowledge_base.KnowledgeRepository') as mock_knowledge_repo, \
-         patch('app.knowledge.knowledge_base.KnowledgeToAgentRepository') as mock_link_repo:
+         patch('app.knowledge.knowledge_base.KnowledgeToAgentRepository') as mock_link_repo, \
+         patch('app.knowledge.knowledge_base.get_embedder'):
         
         # Configure basic mocks
         mock_session_local.return_value.__enter__.return_value = mock_db

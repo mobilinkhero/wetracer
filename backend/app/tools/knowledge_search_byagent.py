@@ -72,10 +72,11 @@ class KnowledgeSearchByAgent(Toolkit):
         self.seen_chunk_ids: Set[str] = set()
 
         # NOTE: this used to export the org's key as OPENAI_API_KEY for agno's
-        # old default OpenAI embedder. Search now uses the local FastEmbed
-        # embedder and every model gets its key explicitly, so the env write
-        # was dead — and a cross-tenant race (concurrent orgs overwrote each
-        # other's key in process-global state).
+        # OpenAI embedder. Search now uses the hosted embedder
+        # (app.knowledge.embedder), which builds its client from this org's
+        # configured provider key explicitly — no process-global key, so no
+        # cross-tenant race (concurrent orgs overwrote each other's key in
+        # process-global state when the env write was in use).
         self.agent_knowledge = None
         self._table: Optional[str] = None
         self._schema: Optional[str] = None
@@ -117,7 +118,7 @@ class KnowledgeSearchByAgent(Toolkit):
                         db_url=settings.DATABASE_URL,
                         schema=source.schema,
                         search_type=SearchType.vector,  # Changed from hybrid to vector for speed
-                        embedder=get_embedder()
+                        embedder=get_embedder(self.org_id)
                     )
                     logger.debug(f"Vector db initialized: {source.table_name}")
 

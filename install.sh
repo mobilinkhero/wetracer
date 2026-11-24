@@ -2,7 +2,7 @@
 #
 # ChatterMate — one-command installer for a fresh Ubuntu 22.04 / 24.04 VPS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/NEW_OWNER/chattermate/main/install.sh \
+#   curl -fsSL https://raw.githubusercontent.com/mobilinkhero/wetracer/main/install.sh \
 #     | sudo bash -s -- [your-domain.com]
 #
 # Or, after cloning the repo:
@@ -41,8 +41,8 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------- config ----
-DEFAULT_REPO_URL="https://github.com/NEW_OWNER/chattermate.git"
-# TODO: replace NEW_OWNER/chattermate with the real repo before publishing.
+DEFAULT_REPO_URL="https://github.com/mobilinkhero/wetracer.git"
+# TODO: replace mobilinkhero/wetracer with the real repo before publishing.
 REPO_URL="${CM_REPO_URL:-$DEFAULT_REPO_URL}"
 INSTALL_DIR="${CM_INSTALL_DIR:-/opt/chattermate}"
 BRANCH="${CM_BRANCH:-main}"
@@ -150,7 +150,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 command -v sudo >/dev/null 2>&1 || die "sudo is required (used for the postgres and app users) but is not installed"
 # Fail fast on the placeholder repo instead of a confusing curl 404 / clone
-# failure halfway through. Replace NEW_OWNER/chattermate with the real repo.
+# failure halfway through. Replace mobilinkhero/wetracer with the real repo.
 case "$REPO_URL" in
     *NEW_OWNER*) die "REPO_URL still points at the NEW_OWNER placeholder — set --repo (or CM_REPO_URL) to the real repo, e.g. https://github.com/<owner>/<repo>.git" ;;
 esac
@@ -554,7 +554,7 @@ cat <<EOF | tee -a "$LOG_FILE"
   default password to change.
 
   Add your AI provider key afterwards in the dashboard
-  (Settings -> AI Setup), or the AI chat will not answer.
+  (Settings -> AI Configuration), or the AI chat will not answer.
 
   Manage it:
     systemctl status chattermate-backend     backend service

@@ -74,22 +74,19 @@ NATIVE_INTEGRATION_TYPE = "NATIVE"
 # stats because CSAT responses are sparse.
 CSAT_WINDOW_DAYS = 30
 
-_embedder = None
+def embed_ticket_text(title: str, description: Optional[str], org_id=None) -> Optional[List[float]]:
+    """Embed ticket text with the org's hosted provider (no local model).
 
-
-def _get_embedder():
-    """Lazy module-level FastEmbed embedder (local model, no API cost)."""
-    global _embedder
-    if _embedder is None:
-        from app.knowledge.embedder import get_embedder
-        _embedder = get_embedder()
-    return _embedder
-
-
-def embed_ticket_text(title: str, description: Optional[str]) -> Optional[List[float]]:
+    ``org_id`` is required for a real embedding: the embedder is built from
+    that org's configured provider key. Without it, or when the org has no
+    usable provider, this returns None and the ticket simply has no embedding
+    (dedup/similarity skips it) instead of failing the ticket.
+    """
     try:
+        from app.knowledge.embedder import get_embedder
+
         content = title if not description else f"{title}\n\n{description}"
-        return _get_embedder().get_embedding(content[:4000])
+        return get_embedder(org_id).get_embedding(content[:4000])
     except Exception as e:
         logger.error(f"Ticket embedding failed: {e}")
         return None
@@ -163,7 +160,7 @@ class TicketService:
             if agent_id is None:
                 agent_id = session_record.agent_id
 
-        embedding = embed_ticket_text(title, description)
+        embedding = embed_ticket_text(title, description, org_id=organization_id)
 
         ticket = Ticket(
             organization_id=organization_id,

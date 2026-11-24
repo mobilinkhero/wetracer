@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-"""Firebase push for the Flutter SDK (no WebView).
+"""Firebase push for mobile clients (no WebView).
 
 When an AI or human reply is delivered to a conversation, `maybe_push_reply`
 decides whether the visitor needs a push:
@@ -70,7 +70,7 @@ TOKEN_PREFIX_CHARS = 12
 def is_live_socket(session_id: str) -> bool:
     """True when at least one Socket.IO client is in the conversation's room.
 
-    The web widget and the Flutter app both join room `session_id` on the
+    The web widget and a mobile app both join room `session_id` on the
     `/widget` namespace when they connect. On any doubt (manager shape
     changed, server not started) assume live: a missed push is better than a
     push that duplicates a reply the visitor already saw live.

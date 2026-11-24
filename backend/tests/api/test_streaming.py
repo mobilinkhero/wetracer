@@ -294,7 +294,7 @@ def test_sse_mid_stream_error_then_done_with_finished_reply(stream_client, test_
     NOTE (finding, see final report): docs/STREAMING-PROTOCOL.md says
     'No `done` follows an `error`' for SSE, but the implementation sends
     done after error whenever last_stream_response is set. A client that
-    stops listening on error (as the Flutter SDK does) never sees the done;
+    stops listening on error never sees the done;
     a client that only handles done still gets the finished reply."""
     conv = _start(stream_client, test_widget)
     fake_stream["install"]([

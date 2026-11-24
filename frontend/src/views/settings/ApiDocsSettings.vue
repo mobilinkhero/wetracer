@@ -15,14 +15,14 @@ limitations under the License.
 -->
 
 <!--
-API Docs — the public Chat API (`/api/v1/mobile`) and the Flutter SDK,
-for the org's own developers. Route: /settings/api-docs.
+API Docs — the public Chat API (`/api/v1/mobile`) for the org's own
+developers. Route: /settings/api-docs.
 
 The bundled doc files below are verbatim copies of the canonical docs —
 keep them in sync when the canonical files change:
-  src/assets/openapi.yaml            <- ~/workspace/chattermate-pgdata/flutter-sdk/openapi.yaml
+  src/assets/openapi.yaml            <- frontend/src/assets/openapi.yaml (this repo)
   src/assets/ai-integration.md       <- docs/AI-INTEGRATION.md
-  src/assets/ai-integration-compact.md <- ~/workspace/chattermate-pgdata/flutter-sdk/llms.txt
+  src/assets/ai-integration-compact.md <- frontend/src/assets/ai-integration-compact.md
   cp <canonical> frontend/src/assets/<name> && npm run build
 -->
 <script setup lang="ts">
@@ -39,7 +39,6 @@ import openApiSpec from '@/assets/openapi.yaml?raw'
 import aiIntegrationDoc from '@/assets/ai-integration.md?raw'
 import aiCompactDoc from '@/assets/ai-integration-compact.md?raw'
 
-const baseUrl = getApiUrl().replace(/\/api\/v1$/, '')
 const apiBase = getApiUrl()
 
 const widgets = ref<Widget[]>([])
@@ -135,8 +134,7 @@ const sendExample = `curl -X POST ${apiBase}/mobile/conversations/<conversation_
         <div class="page-header">
           <h1>API Docs</h1>
           <p class="description">
-            Chat with your AI agents from a mobile app — over the public Chat API or with the
-            Flutter SDK, no WebView. Your widget id is public; secret keys never belong in an app.
+            Chat with your AI agents from a mobile app — over the public Chat API, no WebView. Your widget id is public; secret keys never belong in an app.
           </p>
           <div class="actions">
             <button class="action-btn primary" type="button" @click="copyForAi">{{ copyAiState }}</button>
@@ -302,29 +300,15 @@ const sendExample = `curl -X POST ${apiBase}/mobile/conversations/<conversation_
         </section>
 
         <section class="card">
-          <h2>Flutter SDK</h2>
+          <h2>Build your own client</h2>
           <p>
-            The SDK (<code>flutter_sdk/</code>, package <code>chattermate_chat</code>) does all
-            of the above for you — start/resume, socket, polling fallback, push, media
-            picking — with no WebView.
-          </p>
-          <pre class="code">await ChatterMate.init(
-  widgetId: '{{ selectedWidget?.id ?? 'YOUR_WIDGET_ID' }}',
-  baseUrl: '{{ baseUrl }}',
-);
-// const ChatterMateChatButton()   // launcher button
-// const ChatterMateChatScreen()   // full native chat screen
-final chat = ChatterMate.instance.chat;
-await chat.sendText('Hello, what is my order total?');
-await chat.sendFiles([OutgoingFile(filename: 'order.png', bytes: bytes,
-    contentType: 'image/png')], text: 'What is the total?');</pre>
-          <p>
-            Theme it with <code>ChatterMateTheme(...)</code> on <code>init</code> (colours,
-            bubbles, fonts, launcher) and replace parts with
-            <code>ChatterMateBuilders(...)</code>. Photos use Android's system Photo Picker
-            and documents use the Storage Access Framework — the app needs no gallery or
-            storage permission. Play Integrity / App Attest are intentionally not used;
-            the API relies on the visitor JWT, rate limits and device binding instead.
+            Any HTTP client can use the endpoints above — start a conversation, send
+            messages over REST, and receive live replies on the Socket.IO
+            <code>/widget</code> namespace. The full guide
+            (<code>docs/AI-INTEGRATION.md</code>) and the OpenAPI spec are available
+            to download above. Play Integrity / App Attest are intentionally not
+            used; the API relies on the visitor JWT, rate limits and device
+            binding instead.
           </p>
         </section>
       </div>

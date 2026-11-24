@@ -69,7 +69,7 @@ def upgrade() -> None:
     op.create_table('ai_configs',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('organization_id', sa.UUID(), nullable=False),
-    sa.Column('model_type', sa.Enum('OPENAI', 'ANTHROPIC', 'DEEPSEEK', 'GOOGLE', 'GOOGLEVERTEX', 'GROQ', 'MISTRAL', 'HUGGINGFACE', 'OLLAMA', 'XAI', name='aimodeltype'), nullable=False),
+    sa.Column('model_type', sa.Enum('OPENAI', 'ANTHROPIC', 'DEEPSEEK', 'GOOGLE', 'GOOGLEVERTEX', 'GROQ', 'MISTRAL', 'HUGGINGFACE', 'XAI', name='aimodeltype'), nullable=False),
     sa.Column('model_name', sa.String(), nullable=False),
     sa.Column('encrypted_api_key', sa.String(), nullable=False),
     sa.Column('settings', sa.JSON(), nullable=True),

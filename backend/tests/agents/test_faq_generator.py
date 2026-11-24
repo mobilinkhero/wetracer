@@ -197,7 +197,7 @@ async def test_plain_json_fallback_on_structured_output_failure():
 
     with patch("app.agents.faq_generator.create_model", return_value=MagicMock()), \
          patch("agno.agent.Agent", side_effect=fake_agent):
-        faqs = await _agent("OLLAMA").generate_from_text("docs")
+        faqs = await _agent("HUGGINGFACE").generate_from_text("docs")
     assert attempts == ["native", "fallback"]
     assert [f.question for f in faqs] == ["How do I export data?"]
 
@@ -252,7 +252,7 @@ async def test_metering_hook_counts_fallback_call_too():
 
     with patch("app.agents.faq_generator.create_model", return_value=MagicMock()), \
          patch("agno.agent.Agent", side_effect=fake_agent):
-        agent = _agent("OLLAMA")
+        agent = _agent("HUGGINGFACE")
         agent.on_llm_call = lambda: calls.append(1)
         await agent.generate_from_text("docs")
     assert len(calls) == 2  # native attempt + plain-JSON fallback

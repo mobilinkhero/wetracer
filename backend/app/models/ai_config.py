@@ -29,7 +29,6 @@ class AIModelType(str, Enum):
     GROQ = "GROQ"
     MISTRAL = "MISTRAL"
     HUGGINGFACE = "HUGGINGFACE"
-    OLLAMA = "OLLAMA"
     XAI = "XAI"
     OPENAI_COMPATIBLE = "OPENAI_COMPATIBLE"
     CHATTERMATE = "CHATTERMATE" # own model for enterprise customers

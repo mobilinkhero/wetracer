@@ -255,9 +255,10 @@ class Settings(BaseSettings):
     # turns. Stored history is never touched.
     AGENT_HISTORY_MAX_CHARS: int = int(os.getenv("AGENT_HISTORY_MAX_CHARS", "40000"))
 
-    # Knowledge chunking. The search embedder (bge-small, 512-token window) only
-    # sees roughly this much text per row, so a bigger chunk is not searchable
-    # past this point — and crawled text is URL-dense (~3 chars/token).
+    # Knowledge chunking. Chunks stay small so a search hit is a tight passage
+    # rather than a whole page — and crawled text is URL-dense (~3 chars/token).
+    # The hosted embedders read far more than this per call, so the chunk size
+    # is a retrieval-quality choice now, not a model window limit.
     KNOWLEDGE_CHUNK_SIZE: int = int(os.getenv("KNOWLEDGE_CHUNK_SIZE", "1100"))
     KNOWLEDGE_CHUNK_OVERLAP: int = int(os.getenv("KNOWLEDGE_CHUNK_OVERLAP", "120"))
     # Hits returned per knowledge search, and the ceiling on the rendered result
@@ -364,8 +365,13 @@ class Settings(BaseSettings):
     EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
     EMBEDDING_MAX_WORKERS: int = int(os.getenv("EMBEDDING_MAX_WORKERS", "4"))
     
-    # FastEmbed Configuration
-    FASTEMBED_MODEL: str = os.getenv("FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5")
+    # Hosted embedding configuration (app.knowledge.embedder). Embeddings come
+    # from the org's configured provider API — no local model is downloaded or
+    # run. Dimensions are fixed at 384 to match the stored vector(384) columns;
+    # both models below support truncating to 384.
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    EMBEDDING_DIMENSIONS: int = int(os.getenv("EMBEDDING_DIMENSIONS", "384"))
+    GEMINI_EMBEDDING_MODEL: str = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
     
     # Embedding Optimization Configuration
     ENABLE_IMMEDIATE_EMBEDDING: bool = os.getenv("ENABLE_IMMEDIATE_EMBEDDING", "true").lower() == "true"

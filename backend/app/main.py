@@ -310,7 +310,7 @@ app.include_router(
     tags=["widget"]
 )
 
-# Flutter SDK (no WebView): public REST chat API + push registration.
+# Public mobile REST chat API + push registration (no WebView).
 # Visitor endpoints authenticate with the conversation token only; the FCM
 # credential endpoints inside use dashboard auth.
 from app.api import mobile_chat

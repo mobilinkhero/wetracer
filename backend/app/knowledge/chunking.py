@@ -15,11 +15,10 @@ limitations under the License.
 
 Splitting a knowledge page into embedder-sized chunks.
 
-The search embedder only reads ~512 tokens, so a page stored as one row is
-searchable by its first screen only, and a single hit can be tens of thousands
-of chars — enough to overflow the model's context when a few are replayed. Each
-page is therefore stored as several small rows that together hold every byte of
-it.
+Chunks stay small on purpose: a page stored as one row would return a single
+hit tens of thousands of chars long — enough to overflow the model's context
+when a few are replayed. Each page is therefore stored as several small rows
+that together hold every byte of it, so a hit is a tight passage.
 
 Stored chunks are disjoint verbatim slices: concatenating a page's chunks gives
 the page back exactly, which is what the dashboard, the FAQ generator and page

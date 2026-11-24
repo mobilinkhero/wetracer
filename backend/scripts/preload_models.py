@@ -15,56 +15,23 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-import os
-import sys
+# This script used to download the local FastEmbed embedding model so the
+# first request did not pay for the download. Embeddings now come from the
+# hosted provider API (app.knowledge.embedder) using each organization's
+# configured provider key, so there is no local model to preload — this
+# script is a no-op kept only because scripts/start.sh still calls it.
+
 import logging
 
-# Add the app directory to the Python path
-sys.path.insert(0, '/app')
-
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def preload_agno_embedder():
-    """Preload the fastembed model agno embeds with"""
-    try:
-        from agno.embedder.fastembed import FastEmbedEmbedder
-        
-        # Get model ID from environment or use default
-        model_id = os.getenv("FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5")
-        
-        logger.info(f"Preloading Agno FastEmbedEmbedder: {model_id}")
-        
-        # Initialize the embedder
-        embedder = FastEmbedEmbedder(id=model_id)
-        
-        # Test embedding using the correct API method
-        test_text = "Test embedding for Agno embedder initialization."
-        embedding = embedder.get_embedding(test_text)
-        
-        logger.info(f"Successfully preloaded Agno embedder {model_id}. Embedding dimension: {len(embedding)}")
-        
-        # Clean up
-        del embedder
-        del embedding
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"Failed to preload Agno embedder: {str(e)}")
-        return False
 
 def main():
-    """Warm the embedding model cache so the first request does not pay for the download"""
-    logger.info("Starting model preloading process...")
-
-    if not preload_agno_embedder():
-        logger.error("Model preloading failed")
-        return 1
-
-    logger.info("All models preloaded successfully!")
+    """Nothing to preload: embeddings are hosted, no local model exists."""
+    logger.info("Embeddings are hosted (app.knowledge.embedder); nothing to preload.")
     return 0
 
+
 if __name__ == "__main__":
-    sys.exit(main()) 
+    raise SystemExit(main())

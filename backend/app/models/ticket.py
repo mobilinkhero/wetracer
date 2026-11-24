@@ -40,10 +40,12 @@ from app.database import Base
 # session_to_agents.ticket_id so existing session/widget consumers keep working.
 TICKET_NUMBER_PREFIX = "TKT"
 
-# FastEmbed model used for dedup/similarity embeddings. The dimension is baked
-# into the tickets.embedding column — changing models requires a re-embed
-# migration.
-TICKET_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+# Hosted embedding model used for dedup/similarity embeddings
+# (app.knowledge.embedder). The dimension is baked into the tickets.embedding
+# column, so it stays 384. Vectors written by the old local model live in a
+# different space than the hosted model's vectors at the same dimension, so
+# stored embeddings need a re-embed for exact similarity; new rows are fine.
+TICKET_EMBEDDING_MODEL = "text-embedding-3-small"
 TICKET_EMBEDDING_DIM = 384
 
 
@@ -183,7 +185,7 @@ class Ticket(Base):
     # Which chat agent created it (source=chat_ai).
     agent_id = Column(UUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True)
 
-    # Dedup: cosine similarity over FastEmbed embeddings (pgvector).
+    # Dedup: cosine similarity over hosted-model embeddings (pgvector).
     duplicate_of_ticket_id = Column(UUID(as_uuid=True), ForeignKey("tickets.id", ondelete="SET NULL"), nullable=True)
     embedding = Column(Vector(TICKET_EMBEDDING_DIM), nullable=True)
 

@@ -70,7 +70,7 @@ export function useWidgetController(props: WidgetControllerProps): WidgetControl
     const isAskAnythingStyle = computed(() => customization.value.chat_style === 'ASK_ANYTHING' || isAuroraStyle.value)
 
     const socket = useWidgetSocket({ panel: true })
-    const { messages, loading, errorMessage, showError, loadingHistory, hasStartedChat, connectionStatus, humanAgent } = socket
+    const { messages, loading, errorMessage, showError, loadingHistory, hasStartedChat, connectionStatus, humanAgent, isLiveStreaming } = socket
 
     // Client-side typewriter reveal for live agent/bot replies; keep the view pinned
     // to the bottom as text grows.
@@ -166,7 +166,7 @@ export function useWidgetController(props: WidgetControllerProps): WidgetControl
 
     // The message box: typing, sending, and a message held while a reply is coming.
     const composer = useComposer({
-        socket: { loading, hasStartedChat, connectionStatus, sendMessage: socket.sendMessage },
+        socket: { loading, hasStartedChat, connectionStatus, isLiveStreaming, sendMessage: socket.sendMessage },
         emailGate,
         hasConversationToken: auth.hasConversationToken,
         isAskAnythingStyle,

@@ -208,9 +208,6 @@ def create_model(model_type: str, api_key: str, model_name: str, max_tokens: int
         elif model_type == 'HUGGINGFACE':
             from agno.models.huggingface import HuggingFace
             return HuggingFace(api_key=api_key, id=model_name, max_tokens=max_tokens)
-        elif model_type == 'OLLAMA':
-            from agno.models.ollama import Ollama
-            return Ollama(id=model_name)
         elif model_type == 'XAI':
             from agno.models.xai import xAI
             return xAI(api_key=api_key, id=model_name, max_tokens=max_tokens)

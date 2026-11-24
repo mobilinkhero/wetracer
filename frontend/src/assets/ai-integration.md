@@ -139,7 +139,7 @@ Rules, all enforced server-side:
   was stored.
 - If the server fails the AI turn after storing the message, the send
   returns 500 and the message stays stored — poll for it, do not resend.
-  (Observed live 2026-11-23: the seeded Ollama AI config's stored key
+  (Observed live 2026-11-23: the seeded test AI config's stored key
   failed to decrypt, so the turn 500'd while the message stored fine.
   The endpoint logic itself is covered by the backend tests with a
   mocked model.)

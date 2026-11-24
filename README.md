@@ -172,7 +172,8 @@ ChatterMate is also manageable **over MCP** itself — see the
 
 Run your agents on the model you trust: **OpenAI, Anthropic Claude, Google
 Gemini, Mistral, xAI Grok, DeepSeek, Groq**, or any **OpenAI-compatible
-endpoint** (self-hosted, OpenRouter, Ollama…). Use your own API key, pick from
+endpoint** (OpenRouter or another hosted OpenAI-compatible endpoint…).
+Use your own API key, pick from
 the list or enter any model ID, and switch providers at any time without code
 changes.
 
@@ -458,7 +459,7 @@ Python + Node builds, systemd services, nginx, and free HTTPS when you give
 it a domain:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NEW_OWNER/chattermate/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mobilinkhero/wetracer/main/install.sh \
   | sudo bash -s -- your-domain.com
 ```
 
@@ -466,11 +467,11 @@ No domain? Leave it off and the installer uses the server's public IP over
 HTTP instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NEW_OWNER/chattermate/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/mobilinkhero/wetracer/main/install.sh \
   | sudo bash
 ```
 
-> Replace `NEW_OWNER/chattermate` with the real repo once it is published.
+> Replace `mobilinkhero/wetracer` with the real repo once it is published.
 > You can also clone the repo and run `sudo bash install.sh your-domain.com`.
 
 **What you need first:** a fresh Ubuntu 22.04/24.04 VPS with ~2 GB RAM, a
@@ -479,8 +480,12 @@ The whole install takes roughly 10–20 minutes, mostly pip/npm builds.
 
 **When it finishes**, it prints the app URL. Open `<your-url>/setup` and
 create your admin account — the first account owns the workspace, there is
-no default password. Then add your AI provider key in the dashboard
-(Settings → AI Setup), or the AI chat will not answer.
+no default password.
+
+**One post-install step — the AI has no model until you add one:** open the
+dashboard and add your hosted provider's API key at **Settings → AI
+Configuration** (route `/settings/ai-config`). Until you do, the AI chat will
+not answer — the installer ships no model and downloads none.
 
 **Afterwards:**
 
@@ -771,7 +776,7 @@ Yes. Install [ChatterMate Chat](https://wordpress.org/plugins/chattermate-chat/)
 Yes. Run the full stack (Postgres, Redis, backend, frontend) on your own infrastructure with `npm install -g chattermate-deploy` — see [Quick Start](#quick-start). Self-hosting gives you complete data ownership.
 
 **Which AI models does ChatterMate support?**
-OpenAI, Anthropic (Claude), Google Gemini, Mistral, xAI (Grok), DeepSeek, Groq, and any OpenAI-compatible endpoint (self-hosted, OpenRouter, Ollama) — bring your own API key, or enter a custom model ID for any model a provider supports. You can switch providers at any time without code changes.
+OpenAI, Anthropic (Claude), Google Gemini, Mistral, xAI (Grok), DeepSeek, Groq, and any hosted OpenAI-compatible endpoint (OpenRouter or another hosted provider) — bring your own API key, or enter a custom model ID for any model a provider supports. You can switch providers at any time without code changes.
 
 **Can the AI chatbot capture and qualify leads?**
 Yes. With [AI lead capture](#ai-lead-capture) the agent collects contact details during the conversation (with optional consent), writes a qualification summary, and can push the lead to HubSpot or Pipedrive. It works on the web widget and on messaging channels like WhatsApp and Instagram.

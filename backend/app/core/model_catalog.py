@@ -47,8 +47,8 @@ class CatalogProvider(TypedDict):
     # Console URL where the user creates/copies their API key for this provider.
     api_key_url: str
     models: List[CatalogModel]
-    # Whether this provider needs a user-supplied base URL (e.g. a self-hosted or
-    # third-party OpenAI-compatible endpoint). Defaults to False when absent.
+    # Whether this provider needs a user-supplied base URL (e.g. a third-party
+    # OpenAI-compatible gateway endpoint). Defaults to False when absent.
     requires_base_url: bool
 
 
@@ -226,9 +226,10 @@ MODEL_CATALOG: Dict[str, CatalogProvider] = {
     },
     "OPENAI_COMPATIBLE": {
         # Names the wire protocol, not the field: the endpoint must speak the
-        # OpenAI chat-completions API (OpenRouter, vLLM, llama.cpp, Ollama, LiteLLM
-        # and friends all do). The parenthetical is what self-hosters recognise.
-        "label": "OpenAI-compatible (self-hosted, OpenRouter, Ollama…)",
+        # OpenAI chat-completions API (OpenRouter, LiteLLM and other hosted
+        # gateways all do). Only hosted provider APIs are supported — no
+        # self-hosted or local model.
+        "label": "OpenAI-compatible (OpenRouter, LiteLLM…)",
         "requires_api_key": True,
         "custom_allowed": True,
         "requires_base_url": True,
@@ -249,8 +250,8 @@ def is_known_provider(provider: str) -> bool:
 def requires_base_url(provider: str) -> bool:
     """Return True if the provider needs a user-supplied base URL.
 
-    The catalog is the single source of truth for this, so a new self-hosted or
-    gateway provider only has to set ``requires_base_url`` on its entry — callers
+    The catalog is the single source of truth for this, so a new gateway
+    provider only has to set ``requires_base_url`` on its entry — callers
     must not string-compare against a specific provider name.
     """
     if not is_known_provider(provider):

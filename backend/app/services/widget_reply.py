@@ -221,7 +221,7 @@ async def deliver_ai_reply(sid: str, session: dict, response: Optional[ChatRespo
     await sio.emit('chat_response', reply_payload(response, session_id, chat_agent, choice_limits_for(session)),
                    room=session_id, namespace=WIDGET_NAMESPACE)
 
-    # Flutter SDK: a reply delivered to a conversation with registered mobile
+    # Mobile: a reply delivered to a conversation with registered mobile
     # devices and no live socket gets an FCM push (or a recorded test-mode
     # attempt when no FCM credentials are configured). Best-effort: never
     # fails the turn.

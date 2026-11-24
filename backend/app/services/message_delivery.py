@@ -102,7 +102,7 @@ async def deliver_to_customer(db: Session, session_record: SessionToAgent, paylo
 
 async def _maybe_push(db: Session, session_record: SessionToAgent, payload: dict,
                       message_id: Optional[int], source: MessageSource) -> None:
-    """Flutter SDK push for a reply delivered here.
+    """Mobile push for a reply delivered here.
 
     This is the human-reply hook: the inbox agent-message handler, channel
     replies and ticket replies all deliver through this function. AI replies

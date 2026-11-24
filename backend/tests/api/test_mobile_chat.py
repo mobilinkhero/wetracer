@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-"""Tests for the Flutter SDK REST API (app/api/mobile_chat.py) and the push
+"""Tests for the public mobile REST API (app/api/mobile_chat.py) and the push
 service (app/services/push_service.py).
 
 Same layout as the other API tests: a standalone FastAPI app with the mobile

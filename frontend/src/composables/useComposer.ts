@@ -41,6 +41,8 @@ export interface ComposerSocket {
     loading: Ref<boolean>
     hasStartedChat: Ref<boolean>
     connectionStatus: Ref<string>
+    /** True while a streamed reply is still arriving (useWidgetSocket.isLiveStreaming). */
+    isLiveStreaming?: Ref<boolean>
     sendMessage: (text: string, email: string, files: OutgoingFile[], extra: Record<string, unknown>) => Promise<unknown>
 }
 
@@ -99,6 +101,11 @@ export function useComposer({
     const { loading, hasStartedChat, connectionStatus } = socket
     const { emailInput, shouldCollectEmail } = emailGate
 
+    // A reply is in flight while the typing dots run OR a streamed reply
+    // is still arriving: the first token already cleared `loading`, so
+    // `loading` alone lets a second message jump the queue mid-stream.
+    const replyInFlight = computed(() => loading.value || socket.isLiveStreaming?.value === true)
+
     const newMessage = ref('')
 
     // Neither sending a second agent run nor dropping what the visitor typed is
@@ -108,7 +115,7 @@ export function useComposer({
     // A pasted password, key or card number is held back (the server also hides them).
     const secretInMessage = computed(() => looksSecret(newMessage.value))
 
-    const canSendWhenIdle = () => connectionStatus.value === 'connected' && !loading.value
+    const canSendWhenIdle = () => connectionStatus.value === 'connected' && !replyInFlight.value
 
     // A message held until the email is in (redesigned panel only, see holdForEmail).
     const heldForEmail = ref(false)
@@ -131,7 +138,7 @@ export function useComposer({
     // their cursor after every reply (#316). Sending stays gated on
     // isMessageInputEnabled, so a second message cannot jump the queue.
     const canTypeMessage = computed(() => isMessageInputEnabled.value || (
-        loading.value && connectionStatus.value === 'connected' && hasStartedChat.value
+        replyInFlight.value && connectionStatus.value === 'connected' && hasStartedChat.value
     ))
 
     const placeholderText = computed(() => {
@@ -150,7 +157,7 @@ export function useComposer({
             return
         }
 
-        if (loading.value && hasStartedChat.value) {
+        if (replyInFlight.value && hasStartedChat.value) {
             pendingSend.value = true
             return
         }
@@ -175,7 +182,9 @@ export function useComposer({
     // `loading`, so hasStartedChat tells the two apart: a conversation the visitor
     // just closed must not receive the message typed into the one before it. A drop
     // leaves it in the box, where the composer shows it has not been sent.
-    watch(loading, (isReplying) => {
+    // Watched as one flag, so a message held through a stream goes out when the
+    // stream ends, not only when the typing dots stop.
+    watch(replyInFlight, (isReplying) => {
         if (isReplying || !pendingSend.value) return
         pendingSend.value = false
         if (connectionStatus.value === 'connected' && hasStartedChat.value) void sendMessage()

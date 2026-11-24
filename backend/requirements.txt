@@ -54,7 +54,6 @@ pgvector
 
 google-generativeai
 google-cloud-aiplatform
-ollama
 anthropic
 mistralai<2  # agno 1.7.6 uses the mistralai 1.x API (mistralai.models); 2.x breaks the import
 
@@ -93,8 +92,8 @@ boto3
 
 groq
 
-# Embeddings run on fastembed (ONNX); no torch/transformers stack is installed.
-fastembed==0.7.3
+# Embeddings use the hosted provider API (agno OpenAI/Gemini embedders via
+# app.knowledge.embedder); no local model is installed or downloaded.
 
 # Shopify API
 ShopifyAPI

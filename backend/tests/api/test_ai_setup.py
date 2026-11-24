@@ -394,12 +394,12 @@ def test_setup_ai_base_url_enforced_for_any_catalog_provider(client, db, test_us
     enforces it without another hardcoded provider-name check."""
     from app.core import model_catalog
 
-    # OLLAMA is a real AIModelType but is deliberately not in the catalog today,
-    # so it stands in for "a provider added later that needs a base URL".
+    # HUGGINGFACE is a real AIModelType but is deliberately not in the catalog
+    # today, so it stands in for "a provider added later that needs a base URL".
     fake_catalog = {
         **model_catalog.MODEL_CATALOG,
-        "OLLAMA": {
-            "label": "Ollama (self-hosted)",
+        "HUGGINGFACE": {
+            "label": "HuggingFace (future provider)",
             "requires_api_key": True,
             "custom_allowed": True,
             "requires_base_url": True,
@@ -409,7 +409,7 @@ def test_setup_ai_base_url_enforced_for_any_catalog_provider(client, db, test_us
     }
 
     config_data = {
-        "model_type": "OLLAMA",
+        "model_type": "HUGGINGFACE",
         "model_name": "some-model",
         "api_key": "test_valid_key"
     }

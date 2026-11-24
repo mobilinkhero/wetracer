@@ -103,7 +103,7 @@ async def alert_intake(
     service = TicketService(db)
 
     # Re-fired alert → append to the open ticket instead of a duplicate.
-    embedding = await run_in_threadpool(embed_ticket_text, f"[ALERT] {title}", description)
+    embedding = await run_in_threadpool(embed_ticket_text, f"[ALERT] {title}", description, org_id=org_id)
     if embedding is not None:
         duplicates = service.repo.find_similar(
             org_id, embedding, limit=1, only_open=True,

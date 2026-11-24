@@ -38,7 +38,6 @@ _PROVIDER_DEFAULT_TOKENS = {
     "GROQ": 8_000,
     "MISTRAL": 32_000,
     "HUGGINGFACE": 8_000,
-    "OLLAMA": 8_000,
     "XAI": 128_000,
 }
 _FALLBACK_TOKENS = 8_000
@@ -68,7 +67,6 @@ _MODEL_PREFIX_TOKENS = {
     "mistral-large": 128_000,
     "mistral": 32_000,
     "grok": 128_000,
-    "qwen": 32_000,
     "kimi": 128_000,
 }
 

@@ -14,9 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-"""Mobile (Flutter SDK) models: device push tokens, push attempts, FCM config.
+"""Mobile models: device push tokens, push attempts, FCM config.
 
-The Flutter app chats over the public REST API in app/api/mobile_chat.py and
+A mobile app chats over the public REST API in app/api/mobile_chat.py and
 receives live replies on the web widget's Socket.IO namespace. When no live
 socket is connected to a conversation, a reply is pushed via Firebase Cloud
 Messaging instead. These tables hold the registered devices, a record of
@@ -34,7 +34,7 @@ from app.database import Base
 class MobileDeviceToken(Base):
     """One FCM registration token for one conversation.
 
-    Registered by the Flutter app (POST /api/v1/mobile/conversations/{id}/devices).
+    Registered by a mobile app (POST /api/v1/mobile/conversations/{id}/devices).
     Upserted on (session_id, push_token): re-registering the same token refreshes
     it instead of duplicating the row. The full token is stored because FCM
     needs it to send; it is never returned by any API (push-attempts only expose

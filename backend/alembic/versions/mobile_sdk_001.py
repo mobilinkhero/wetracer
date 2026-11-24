@@ -1,4 +1,4 @@
-"""Flutter SDK tables: mobile devices, push attempts, FCM config
+"""Mobile API tables: mobile devices, push attempts, FCM config
 
 New tables for the public REST Chat API (/api/v1/mobile):
 - mobile_device_tokens: one FCM registration token per conversation

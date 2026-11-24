@@ -34,7 +34,7 @@ from app.services.ticket import NATIVE_INTEGRATION_TYPE, TicketService, render_c
 
 @pytest.fixture(autouse=True)
 def no_embeddings():
-    """Embeddings hit the local FastEmbed model — irrelevant to these tests."""
+    """Embeddings hit the hosted provider API — irrelevant to these tests."""
     with patch("app.services.ticket.embed_ticket_text", return_value=None):
         yield
 

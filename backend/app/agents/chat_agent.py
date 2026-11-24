@@ -1880,8 +1880,7 @@ Keep your responses concise and focused. Provide clear, actionable information i
                 kb_hit = None
                 if not force_model and not images and not attachments:
                     kb_hit = await find_kb_candidate(agent_id, org_id, message)
-                if kb_hit is not None and (
-                        len(kb_hit.matched_keywords) >= 2 or kb_hit.confidence >= 0.5):
+                if kb_hit is not None and kb_hit.confidence >= 0.5:
                     response_content = self._kb_chat_response(
                         kb_hit.answer, kb_hit.source_name, kb_hit.source_type)
                     response_content.message, _ = check_output(

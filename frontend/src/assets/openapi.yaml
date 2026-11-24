@@ -1,7 +1,6 @@
 # ChatterMate public Chat API — OpenAPI 3.0.3
 #
-# The API the Flutter SDK (`flutter_sdk/`, package `chattermate_chat`) and any
-# raw-HTTP client use to chat with a ChatterMate widget without a WebView.
+# The API any raw-HTTP client uses to chat with a ChatterMate widget without a WebView.
 #
 # Source of truth: the implementation in `backend/app/api/mobile_chat.py`
 # (`/api/v1/mobile`, visitor endpoints) and `backend/app/api/mobile_admin.py`
@@ -10,11 +9,11 @@
 # (`backend/tests/api/test_mobile_chat.py`: 21 passed,
 # `backend/tests/api/test_mobile_admin.py`: 5 passed).
 #
-# Companion doc (human + LLM readable, both integration paths with copy-paste
-# code): `docs/AI-INTEGRATION.md` in the repo. Compact llms.txt variant:
-# `flutter-sdk/llms.txt` next to this file.
+# Companion doc (human + LLM readable, with copy-paste code):
+# `docs/AI-INTEGRATION.md` in the repo. Compact variant:
+# `ai-integration-compact.md` next to this file.
 #
-# Corrections to the earlier contract (`flutter-sdk/API_CONTRACT.md` v1) that
+# Corrections to the earlier API contract (v1) that
 # this spec encodes — the code wins where they disagree:
 # - The visitor JWT lives 1 hour (`expires_in: 3600`), not 30 days.
 # - `POST /conversations/{id}/rotate` exists (not in the contract): it revokes
@@ -480,7 +479,7 @@ paths:
       operationId: saveFcmConfig
       summary: Store the org's FCM service-account JSON (dashboard admin only)
       description: |
-        The Flutter app never handles FCM service-account keys: an org admin
+        The mobile app never handles FCM service-account keys: an org admin
         stores them once from the dashboard. The JSON is stored encrypted
         and is **never** returned by any GET — the GET returns masked status
         only. Once configured, pushes go out for real via `firebase-admin`

@@ -23,10 +23,12 @@ so the answer arrives in under a second instead of after a 20s–3min
 generation on this CPU-only box.
 
 Confidence gate: vector search always returns a nearest hit, even for an
-unrelated question, so a hit alone is not enough. The question must also
-share distinctive words with the article (title or text): at least 2 shared
-keywords, or at least half of the question's keywords. Anything below the
-gate goes to the model, which may still search the KB with its own tool.
+unrelated question, so a hit alone is not enough. The instant answer needs
+confidence >= 0.5 — the share of the question's distinctive words found in
+the article (a title word counts extra, see _confidence). Below 0.5 the
+question goes to the model, which may still search the KB with its own tool;
+a near miss (confidence >= 0.25 with at least 2 matched keywords) is pasted
+as context for the lean model instead of being answered verbatim.
 
 Seeded test articles live in backend/scripts/seed_test_kb.py (test-only).
 """
@@ -139,20 +141,20 @@ async def find_kb_candidate(agent_id, org_id, question: str) -> Optional[KBHit]:
 
 
 async def find_kb_answer(agent_id, org_id, question: str,
-                         min_keywords: int = 2,
                          min_confidence: float = 0.5) -> Optional[KBHit]:
     """High-confidence KB answer for `question`, or None to use the model.
 
-    The vector search always returns a nearest hit, even for an unrelated
-    question, so a hit alone is not enough: the question must share at
-    least `min_keywords` distinctive words with the article, or at least
-    `min_confidence` of its keywords. Anything below the gate goes to the
-    model, which may still search the KB with its own tool.
+    The gate is confidence only: the share of the question's distinctive
+    words found in the article must be at least `min_confidence` (default
+    0.5). A hit with 2 matched words out of 5 (0.4) is NOT an instant
+    answer — it is a near miss the lean model may use as context — while
+    2 out of 3 (0.67) is. Anything below the gate goes to the model, which
+    may still search the KB with its own tool.
     """
     hit = await find_kb_candidate(agent_id, org_id, question)
     if hit is None:
         return None
-    if len(hit.matched_keywords) < min_keywords and hit.confidence < min_confidence:
+    if hit.confidence < min_confidence:
         logger.debug(
             f"KB hit '{hit.source_name}' rejected: confidence {hit.confidence:.2f}, "
             f"matched {hit.matched_keywords} for question {question[:60]!r}")

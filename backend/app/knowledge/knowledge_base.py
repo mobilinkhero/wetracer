@@ -87,10 +87,12 @@ class KnowledgeManager:
 
         table_name = f"d_{org_id}"
 
-        # One loaded model per process; agno's embedder reloads it per call.
-        embedder = get_embedder()
-        
-        # Dimensions will be automatically set by the model
+        # Hosted embeddings (no local model): a fresh API client built from
+        # this org's configured provider key (see app.knowledge.embedder).
+        embedder = get_embedder(self.org_id)
+
+        # Vectors are 384-dim (app.knowledge.embedder.EMBEDDING_DIMENSIONS),
+        # matching the stored columns.
 
         # Import the shared engine to avoid creating separate connection pools
         from app.database import engine as shared_engine
