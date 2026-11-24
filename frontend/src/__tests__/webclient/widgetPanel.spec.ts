@@ -168,12 +168,17 @@ describe('the panel', () => {
         expect(wrapper.text()).not.toContain('AI can make mistakes')
     })
 
-    it('offers attachments only after a person took over, as the classic widget does', async () => {
+    it('offers attachments from the start when allowed, and still after a person took over', async () => {
         await mountPanel({}, { allowAttachments: true })
-        expect(wrapper.find('button[aria-label="Attach a file"]').exists()).toBe(false)
+        expect(wrapper.find('button[aria-label="Attach a file"]').exists()).toBe(true)
         socket.humanAgent.value = { human_agent_name: 'Priya' }
         await settle(wrapper)
         expect(wrapper.find('button[aria-label="Attach a file"]').exists()).toBe(true)
+    })
+
+    it('offers no attachments when they are not allowed', async () => {
+        await mountPanel({}, { allowAttachments: false })
+        expect(wrapper.find('button[aria-label="Attach a file"]').exists()).toBe(false)
     })
 
     it('minimizes through the host page', async () => {

@@ -161,7 +161,7 @@ describe('workflow screens', () => {
         await pushState({ type: 'landing_page', button_text: 'Start Chat', landing_page_data: { heading: 'Welcome aboard', content: 'We answer in minutes.' } })
         expect(wrapper.find('h2').text()).toBe('Welcome aboard')
         expect(wrapper.find('textarea[aria-label="Message"]').exists()).toBe(false)
-        expect(wrapper.find('.cm-footer a').text()).toContain('Powered by')
+        expect(wrapper.find('.cm-footer__brand').text()).toContain('Powered by')
         await buttonNamed('Start Chat').trigger('click')
         await settle(wrapper)
         expect(socketCalls.proceedWorkflow).toHaveBeenCalledTimes(1)

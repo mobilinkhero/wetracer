@@ -138,10 +138,12 @@ describe('the panel shell', () => {
         expect(wrapper!.attributes('style')).toContain('border-radius: 0')
     })
 
-    it('links "Powered by WeTracer" unless the plan hides it', async () => {
+    it('shows "Powered by WeTracer" as plain text unless the plan hides it', async () => {
         panel()
-        const link = wrapper!.get('.cm-footer a')
-        expect(link.text().replace(/\s+/g, ' ')).toBe('Powered by WeTracer')
+        const brand = wrapper!.get('.cm-footer__brand')
+        expect(brand.element.tagName).toBe('SPAN')
+        expect(brand.text().replace(/\s+/g, ' ')).toBe('Powered by WeTracer')
+        expect(wrapper!.find('.cm-footer a').exists()).toBe(false)
         ctrl.showBranding.value = false
         ctrl.showAiDisclaimer.value = false
         await nextTick()
@@ -231,7 +233,8 @@ describe('the panel\'s screens and notices', () => {
         ['the unavailable notice', { showAuthError: ref(true), isApiKeyAuthRequired: ref(true) }],
     ] as Array<[string, Partial<FakeController>]>)('keeps "Powered by WeTracer" under %s, without the AI disclosure', (_name, state) => {
         panel(state)
-        expect(wrapper!.get('.cm-footer a').text().replace(/\s+/g, ' ')).toBe('Powered by WeTracer')
+        expect(wrapper!.get('.cm-footer__brand').text().replace(/\s+/g, ' ')).toBe('Powered by WeTracer')
+        expect(wrapper!.find('.cm-footer a').exists()).toBe(false)
         expect(wrapper!.text()).not.toContain('AI can make mistakes')
     })
 

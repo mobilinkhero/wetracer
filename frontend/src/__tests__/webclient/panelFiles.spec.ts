@@ -46,7 +46,7 @@ const ATTACHMENTS = [
 ]
 
 describe('files on a message', () => {
-    it('shows images as thumbnails that open the preview, and every file as a download link', async () => {
+    it('shows images as thumbnails only, and non-image files as download links', async () => {
         mountPart(AttachmentList, {}, { attachments: ATTACHMENTS })
         const thumb = wrapper!.get('button[aria-label="Preview shot.png"]')
         expect(thumb.get('img').attributes('src')).toBe('https://files.test/f/1')
@@ -54,11 +54,13 @@ describe('files on a message', () => {
         expect(ctrl.openPreview).toHaveBeenCalledWith(expect.objectContaining({
             filename: 'shot.png', type: 'image/png', file_url: 'https://files.test/f/1',
         }))
+        // The image has no filename/size link line under it — only the PDF does.
         const links = wrapper!.findAll('a.cm-attachments__link')
-        expect(links).toHaveLength(2)
-        expect(links[1].attributes('href')).toBe('https://files.test/f/2')
-        expect(links[1].attributes('target')).toBe('_blank')
-        expect(links[1].text()).toContain('invoice.pdf (30 B)')
+        expect(links).toHaveLength(1)
+        expect(links[0].attributes('href')).toBe('https://files.test/f/2')
+        expect(links[0].attributes('target')).toBe('_blank')
+        expect(links[0].text()).toContain('invoice.pdf (30 B)')
+        expect(wrapper!.text()).not.toContain('shot.png (12 B)')
         // A PDF has no thumbnail.
         expect(wrapper!.findAll('button')).toHaveLength(1)
     })

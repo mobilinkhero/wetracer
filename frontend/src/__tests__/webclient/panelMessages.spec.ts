@@ -80,14 +80,26 @@ describe('a message in the panel', () => {
         item({
             message_type: 'user',
             message: '',
-            attachments: [{ id: 1, filename: 'shot.png', file_url: 'f/1', content_type: 'image/png', file_size: 12 }],
+            attachments: [{ id: 2, filename: 'invoice.pdf', file_url: 'f/2', content_type: 'application/pdf', file_size: 30 }],
         })
         expect(wrapper!.find('.message-bubble').exists()).toBe(false)
         const link = wrapper!.get('.cm-attachments__link')
-        expect(link.text()).toContain('shot.png (12 B)')
+        expect(link.text()).toContain('invoice.pdf (30 B)')
         expect(link.text()).toContain('(opens in a new tab)')
-        expect(link.attributes('href')).toBe('https://files.test/f/1')
+        expect(link.attributes('href')).toBe('https://files.test/f/2')
         expect(link.attributes('rel')).toContain('noopener')
+    })
+
+    it('shows an image attachment as a thumbnail only — no filename link', () => {
+        item({
+            message_type: 'user',
+            message: '',
+            attachments: [{ id: 1, filename: 'shot.png', file_url: 'f/1', content_type: 'image/png', file_size: 12 }],
+        })
+        expect(wrapper!.find('.message-bubble').exists()).toBe(false)
+        expect(wrapper!.get('button[aria-label="Preview shot.png"]').get('img').attributes('src')).toBe('https://files.test/f/1')
+        expect(wrapper!.find('.cm-attachments__link').exists()).toBe(false)
+        expect(wrapper!.text()).not.toContain('shot.png (12 B)')
     })
 
     it('draws a person\'s reply with their name and avatar, keeping the agent-message hook', () => {

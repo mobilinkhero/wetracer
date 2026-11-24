@@ -93,6 +93,30 @@ async def test_image_becomes_agno_image_with_context_note():
 
 
 @pytest.mark.asyncio
+async def test_image_instruction_keeps_agent_in_role():
+    # An unrelated image must not be described: the instruction tells the
+    # model to answer only as the agent and to decline off-role media.
+    result = await prepare_media_context(
+        [_entry("promo.png", "image/png", _png_bytes())],
+        api_key="unused", model_type="GROQ")
+    assert len(result.images) == 1
+    assert "answer based on what it shows" not in result.context_text
+    assert "Answer only as the agent defined by your instructions" in result.context_text
+    assert "do NOT describe or summarise it" in result.context_text
+    assert "do not describe it" in result.context_text
+
+
+@pytest.mark.asyncio
+async def test_document_blocks_carry_in_role_rule():
+    result = await prepare_media_context(
+        [_entry("doc.pdf", "application/pdf", _pdf_bytes("Refund policy is 30 days."))],
+        api_key="unused", model_type="GROQ")
+    assert "Refund policy is 30 days." in result.context_text
+    assert "use only what relates to your job as this agent" in result.context_text
+    assert "Answer only as the agent defined by your instructions" in result.context_text
+
+
+@pytest.mark.asyncio
 async def test_pdf_text_extracted_with_page_count():
     result = await prepare_media_context(
         [_entry("doc.pdf", "application/pdf", _pdf_bytes("Refund policy is 30 days."))],

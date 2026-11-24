@@ -15,9 +15,9 @@ limitations under the License.
 -->
 
 <script setup lang="ts">
-// Files on a message: images as thumbnails that open the preview (and can be
-// downloaded), anything else as a download link with its size. Links open in a
-// new tab; the preview is the panel's PreviewModal.
+// Files on a message: images as thumbnails only — no filename, size or
+// link line under them — anything else as a download link with its size.
+// Links open in a new tab; the preview is the panel's PreviewModal.
 import { inject } from 'vue'
 import { WIDGET_CTX } from '../controller'
 import { PANEL_COPY } from '../../copy'
@@ -58,6 +58,7 @@ const preview = (attachment: Attachment) => ctrl.openPreview({
                 :aria-label="attachment.filename"
             ></audio>
             <a
+                v-if="!ctrl.isImageAttachment(attachment.content_type)"
                 class="cm-attachments__link"
                 :href="ctrl.getDownloadUrl(attachment.file_url)"
                 target="_blank"

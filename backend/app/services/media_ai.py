@@ -64,8 +64,18 @@ MAX_MEDIA_TEXT_CHARS = 12000
 # Whisper model used for voice-note transcription.
 WHISPER_MODEL = "whisper-1"
 
-# agno builds the data-URL mime as image/<format>; 'jpg' is not a real
-# mime subtype, so normalise it.
+# Role rule for every attachment: the agent answers only as the agent its
+# instructions define. Media is evidence for the agent's own job, never a
+# free-standing thing to describe — an unrelated image, document or voice
+# note must not be described or summarised, just declined briefly in the
+# agent's own voice with a pointer to what it can help with.
+_MEDIA_ROLE_RULE = (
+    "Answer only as the agent defined by your instructions. Use each "
+    "attachment only insofar as it relates to what you do as that agent. "
+    "If an attachment has nothing to do with your job, do NOT describe or "
+    "summarise it — briefly say so in your own voice and point the visitor "
+    "to what you can help with."
+)
 _IMAGE_FORMAT_ALIASES = {"jpg": "jpeg"}
 
 # Legacy OLE office files (.doc/.xls) cannot be read without a dedicated
@@ -276,14 +286,17 @@ async def prepare_media_context(
                 format=_IMAGE_FORMAT_ALIASES.get(ext, ext),
             ))
             blocks.append(
-                f"[Image '{filename}' attached below — look at the image itself and "
-                f"answer based on what it shows.]"
+                f"[Image '{filename}' attached below. Look at it only to see "
+                f"whether it relates to what you do as this agent — if it does "
+                f"not, do not describe it: say so briefly and point the visitor "
+                f"to what you can help with.]"
             )
         elif content_type == "application/pdf":
             text, pages = _extract_pdf(data)
             if text:
                 blocks.append(
-                    f"[PDF '{filename}' ({pages} page{'s' if pages != 1 else ''}) content:\n"
+                    f"[PDF '{filename}' ({pages} page{'s' if pages != 1 else ''}) content "
+                    f"— use only what relates to your job as this agent:\n"
                     f"{_truncate(text)}]"
                 )
             else:
@@ -299,7 +312,10 @@ async def prepare_media_context(
             except Exception:
                 text = ""
             if text.strip():
-                blocks.append(f"[Text file '{filename}' content:\n{_truncate(text)}]")
+                blocks.append(
+                    f"[Text file '{filename}' content — use only what relates to "
+                    f"your job as this agent:\n{_truncate(text)}]"
+                )
             else:
                 blocks.append(
                     f"[Text file '{filename}': the file is empty or unreadable. "
@@ -308,7 +324,10 @@ async def prepare_media_context(
         elif content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
             text = _extract_docx(data)
             if text:
-                blocks.append(f"[Document '{filename}' content:\n{_truncate(text)}]")
+                blocks.append(
+                    f"[Document '{filename}' content — use only what relates to "
+                    f"your job as this agent:\n{_truncate(text)}]"
+                )
             else:
                 blocks.append(
                     f"[Document '{filename}': no text could be extracted. Tell the "
@@ -317,7 +336,10 @@ async def prepare_media_context(
         elif content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
             text = _extract_xlsx(data)
             if text:
-                blocks.append(f"[Spreadsheet '{filename}' content:\n{_truncate(text)}]")
+                blocks.append(
+                    f"[Spreadsheet '{filename}' content — use only what relates "
+                    f"to your job as this agent:\n{_truncate(text)}]"
+                )
             else:
                 blocks.append(
                     f"[Spreadsheet '{filename}': no cell values could be extracted. "
@@ -329,7 +351,10 @@ async def prepare_media_context(
                     _transcribe_audio, data, filename, content_type, api_key
                 )
                 if transcript:
-                    blocks.append(f"[Voice note transcript: {transcript}]")
+                    blocks.append(
+                        f"[Voice note transcript — the visitor's spoken words; "
+                        f"answer them only as this agent: {transcript}]"
+                    )
                 else:
                     blocks.append(
                         f"[Voice note '{filename}': transcription failed. Tell the "
@@ -365,7 +390,8 @@ async def prepare_media_context(
     context = ""
     if blocks:
         context = (
-            "[Attachments the visitor sent with this message — use them to answer:\n"
+            "[Attachments the visitor sent with this message:\n"
+            + _MEDIA_ROLE_RULE + "\n\n"
             + "\n\n".join(blocks)
             + "\n]"
         )
