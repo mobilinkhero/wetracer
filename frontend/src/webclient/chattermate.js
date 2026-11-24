@@ -1106,13 +1106,9 @@ import {
         opacity: 0.8;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       }
-      .chattermate-error-footer-link {
+      .chattermate-error-footer-text {
         color: inherit;
         text-decoration: none;
-        cursor: pointer;
-      }
-      .chattermate-error-footer-link:hover {
-        text-decoration: underline;
       }
 
       @media (max-width: 768px) {
@@ -1685,11 +1681,8 @@ import {
       logoPath.setAttribute('fill', 'currentColor');
       logoPath.setAttribute('opacity', '0.6');
       logoSvg.appendChild(logoPath);
-      const footerText = document.createElement('a');
-      footerText.href = 'https://chattermate.chat';
-      footerText.target = '_blank';
-      footerText.rel = 'noopener noreferrer';
-      footerText.className = 'chattermate-error-footer-link';
+      const footerText = document.createElement('span');
+      footerText.className = 'chattermate-error-footer-text';
       footerText.textContent = 'Powered by WeTracer';
       footer.appendChild(logoSvg);
       footer.appendChild(footerText);

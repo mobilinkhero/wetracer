@@ -330,7 +330,7 @@ const updateTokenAuthSetting = async (enabled: boolean) => {
             </div>
             <div class="card-meta">
               <div class="card-title">File attachments</div>
-              <div class="card-desc">Allow users to upload files during human-agent handoff.</div>
+              <div class="card-desc">Let visitors upload files (images, PDFs, voice notes) in the widget — the AI reads them, and they reach a human on handoff too.</div>
             </div>
           </div>
           <label class="switch">

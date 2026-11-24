@@ -56,38 +56,50 @@ describe('the widget footer', () => {
         resetSocket()
     })
 
-    // The "Powered by WeTracer" link, by where it goes and what it says.
+    // The "Powered by WeTracer" text, by what it says. It is plain text, never
+    // a link: no anchor in the footer may point at chattermate.chat.
+    const brandText = () => wrapper.findAll('.cm-footer__brand')
+        .find((el: any) => el.text().replace(/\s+/g, ' ').includes('Powered by WeTracer'))
     const brandLink = () => wrapper.findAll('a[href="https://chattermate.chat"]')
         .find((link: any) => link.text().replace(/\s+/g, ' ').includes('Powered by WeTracer'))
 
     it('keeps the branding by default', async () => {
         await mountWith(undefined)
-        expect(brandLink()).toBeDefined()
+        expect(brandText()).toBeDefined()
+        expect(brandLink()).toBeUndefined()
     })
 
     it('keeps the branding when the plan does not remove it', async () => {
         await mountWith(false)
-        expect(brandLink()).toBeDefined()
+        expect(brandText()).toBeDefined()
+        expect(brandLink()).toBeUndefined()
     })
 
     it('drops the footer when the plan removes it', async () => {
         await mountWith(true)
+        expect(brandText()).toBeUndefined()
         expect(brandLink()).toBeUndefined()
     })
 
+    it('renders the branding as plain text, not a link', async () => {
+        await mountWith(undefined)
+        expect(brandText()!.element.tagName).toBe('SPAN')
+    })
+
     // The chat, the workflow screens and the unavailable screen each draw the footer,
-    // and one mount only reaches one of them. The link lives in PanelFooter alone,
-    // behind the check, so whatever screen is added next gets the check with it.
+    // and one mount only reaches one of them. The brand text lives in PanelFooter
+    // alone, behind the check, so whatever screen is added next gets the check with
+    // it — and no panel template may link out to chattermate.chat at all.
     it('has no branded footer outside the check, on any screen', () => {
         const withLink = Object.entries(panelSources)
             .filter(([, source]) => templateOf(source).includes('href="https://chattermate.chat"'))
             .map(([name]) => name)
-        expect(withLink).toEqual(['PanelFooter.vue'])
+        expect(withLink).toEqual([])
 
         const template = templateOf(panelSources['PanelFooter.vue'])
-        const links = template.match(/<a\b[^>]*href="https:\/\/chattermate\.chat"[^>]*>/g) ?? []
-        expect(links.length).toBeGreaterThan(0)
-        links.forEach(link => expect(link).toContain('v-if="showBranding"'))
+        const brands = template.match(/<span\b[^>]*class="cm-footer__brand"[^>]*>/g) ?? []
+        expect(brands.length).toBeGreaterThan(0)
+        brands.forEach(brand => expect(brand).toContain('v-if="showBranding"'))
     })
 })
 
@@ -113,8 +125,11 @@ describe('the Ask AI footer', () => {
         } as any
     }))
 
-    it('shows the branding', () => {
-        expect(panel(true).find('.askai__brand').exists()).toBe(true)
+    it('shows the branding as plain text, not a link', () => {
+        const brand = panel(true).find('.askai__brand')
+        expect(brand.exists()).toBe(true)
+        expect(brand.element.tagName).toBe('SPAN')
+        expect(brand.attributes('href')).toBeUndefined()
     })
 
     it('keeps the disclaimer without the branding', () => {

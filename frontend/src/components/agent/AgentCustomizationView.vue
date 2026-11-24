@@ -890,7 +890,7 @@ const loadDefaultQuickActions = () => {
                             placeholder="e.g., Hey! 👋 I can track orders, handle returns, or connect you with a human. What can I help with?"
                             class="text-textarea"
                             rows="3"
-                            maxlength="300"
+                            maxlength="1000"
                         ></textarea>
                         <small class="input-hint">Leave empty to let the agent's first reply greet the visitor.</small>
                     </div>

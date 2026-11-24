@@ -330,7 +330,7 @@ onBeforeUnmount(() => {
 
         <div v-if="disclaimer || showBranding" class="askai__foot">
             <span v-if="disclaimer">{{ disclaimer }}</span>
-            <a v-if="showBranding" class="askai__brand" href="https://chattermate.chat" target="_blank" rel="noopener noreferrer">Powered by WeTracer</a>
+            <span v-if="showBranding" class="askai__brand">Powered by WeTracer</span>
         </div>
     </div>
 </template>
@@ -638,8 +638,6 @@ onBeforeUnmount(() => {
     text-decoration: none;
     opacity: 0.8;
 }
-
-.askai__brand:hover { text-decoration: underline; }
 
 @media (max-width: 768px) {
     .askai__body { padding: 16px 16px 20px; }

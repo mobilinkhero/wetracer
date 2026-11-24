@@ -115,6 +115,11 @@ MAX_RATING_FEEDBACK_LENGTH = 2000
 # page stayed open, and the visitor's record with it: the message wasn't kept.
 CONVERSATION_GONE_MESSAGE = 'This conversation has ended. Please send your message again.'
 
+# Attribute flag on the stored welcome message (see _insert_welcome_message):
+# the one copy of the agent's welcome message in a conversation, so a retried
+# first turn never stores it twice.
+WELCOME_MESSAGE_ATTRIBUTE = "welcome_message"
+
 
 def format_datetime(dt):
     """Convert datetime to ISO format string"""
@@ -543,6 +548,59 @@ async def widget_disconnect(sid):
         mobile_security.ws_disconnect(session.get('_ws_ip'), session.get('_ws_widget_id'), sid)
 
 
+def _insert_welcome_message(db, session_id, org_id, agent_id, customer_id) -> bool:
+    """Store the agent's welcome message as the conversation's first message.
+
+    The widget shows the welcome message as its opening bubble, but the AI
+    never saw it — so when the visitor picks something from it (a quick
+    action, or a reply to what it offered) the model had no idea what was
+    offered. Storing it here, before the visitor's first message is stored
+    by whichever branch runs below, puts it at the head of the history the
+    model reads (stream_response's _compact_history and the full-agent turn
+    both read get_session_history, oldest first).
+
+    Returns True when a message was stored. Fully conditional: no welcome
+    message set (or empty/whitespace-only), no agent, no customization, or
+    a welcome already stored — all return False and change nothing. A failed
+    insert must never break the chat, so every failure is logged and
+    swallowed: the visitor's message still goes through exactly as before.
+    """
+    try:
+        # The socket session carries ids as strings; the repository compares
+        # against a UUID column, which needs a real UUID (SQLite in tests
+        # cannot bind a plain string for it).
+        try:
+            agent_uuid = uuid.UUID(str(agent_id)) if agent_id else None
+        except (ValueError, AttributeError, TypeError):
+            agent_uuid = None
+        agent = AgentRepository(db).get_agent(agent_uuid) if agent_uuid else None
+        customization = getattr(agent, "customization", None) if agent else None
+        welcome = (customization.welcome_message or "").strip() if customization else ""
+        if not welcome:
+            return False
+        chat_repo = ChatRepository(db)
+        if chat_repo.has_message_flag(str(session_id), WELCOME_MESSAGE_ATTRIBUTE):
+            return False
+        # A canned line, no model wrote it: source SYSTEM keeps it out of the
+        # plan's AI message count, like the queued-for-human notice.
+        chat_repo.create_message({
+            "message": welcome,
+            "message_type": "bot",
+            "session_id": session_id,
+            "organization_id": org_id,
+            "agent_id": agent_id,
+            "customer_id": customer_id,
+            "attributes": {
+                "source": MessageSource.SYSTEM.value,
+                WELCOME_MESSAGE_ATTRIBUTE: True,
+            },
+        })
+        return True
+    except Exception as insert_err:
+        logger.warning(f"Welcome message not stored for session {session_id}: {insert_err}")
+        return False
+
+
 @sio.on('chat', namespace='/widget')
 @socket_rate_limit(namespace='/widget')
 async def handle_widget_chat(sid, data):
@@ -692,6 +750,15 @@ async def handle_widget_chat(sid, data):
             session['host_prompt'] = host_prompt
         else:
             session.pop('host_prompt', None)
+
+        # The agent's welcome message is what the visitor is picking from, so
+        # the AI needs it in the history before this first message is stored
+        # by the branch below — whichever branch that is. Only on the first
+        # message, only when one is set; the helper no-ops otherwise, and a
+        # held message never reaches this handler at all (the widget holds
+        # sends until the email is in), so a held tap can't store it early.
+        if is_first_customer_message:
+            _insert_welcome_message(db, session_id, org_id, session['agent_id'], customer_id)
 
         # A human-only agent answers nothing: no model, no workflow, and no
         # transfer either — the chat was never with the AI, so there is nothing

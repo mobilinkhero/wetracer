@@ -61,7 +61,7 @@ class AgentBase(BaseModel):
     use_workflow: bool = False
     active_workflow_id: Optional[UUID] = None
     display_name: Optional[str] = None
-    allow_attachments: bool = False
+    allow_attachments: bool = True
     allowed_attachment_types: Optional[List[str]] = Field(
         default=None,
         description="List of allowed attachment type categories: 'images', 'documents', 'office', 'text'. If null/empty, all types allowed."

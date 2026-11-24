@@ -207,7 +207,7 @@ class CustomizationCreate(CustomizationBase):
     # can't display. Reads (CustomizationResponse) intentionally stay unconstrained.
     welcome_title: Optional[str] = Field(default=None, max_length=100)
     welcome_subtitle: Optional[str] = Field(default=None, max_length=250)
-    welcome_message: Optional[str] = Field(default=None, max_length=500)
+    welcome_message: Optional[str] = Field(default=None, max_length=1000)
     chat_initiation_messages: Optional[List[InitiationMessage]] = None
 
     @field_validator('customization_metadata')

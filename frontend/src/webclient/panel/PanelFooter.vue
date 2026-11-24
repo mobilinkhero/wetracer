@@ -16,9 +16,9 @@ limitations under the License.
 
 <script setup lang="ts">
 // Under the composer: the AI disclosure (dropped once a person takes over) and the
-// "Powered by WeTracer" link (unless the plan hides it), one above the other: the
-// full disclosure does not share a line with the link at the panel's width.
-// Screens with no conversation (workflow, unavailable) show the link only.
+// "Powered by WeTracer" text (unless the plan hides it), one above the other: the
+// full disclosure does not share a line with the text at the panel's width.
+// Screens with no conversation (workflow, unavailable) show the text only.
 import { computed, inject } from 'vue'
 import { WIDGET_CTX } from './controller'
 import BrandMark from '../../components/common/BrandMark.vue'
@@ -35,10 +35,10 @@ const showDisclaimer = computed(() => !props.brandingOnly && ctrl.showAiDisclaim
 <template>
     <p v-if="showDisclaimer || showBranding" class="cm-footer">
         <span v-if="showDisclaimer" class="ai-disclaimer">{{ AI_DISCLAIMER_TEXT }}</span>
-        <a v-if="showBranding" class="cm-footer__brand" href="https://chattermate.chat" target="_blank" rel="noopener">
+        <span v-if="showBranding" class="cm-footer__brand">
             <BrandMark :size="13" />
             <span>{{ PANEL_COPY.poweredBy }} <strong>{{ PANEL_COPY.brandName }}</strong></span>
-        </a>
+        </span>
     </p>
 </template>
 

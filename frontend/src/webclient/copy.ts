@@ -57,7 +57,7 @@ export const PANEL_COPY = {
     micUnavailable: 'Voice recording is not available in this browser.',
     /** While picked files upload. Same text as classic. */
     uploading: 'Uploading files...',
-    /** The footer link: "Powered by WeTracer" (its accessible name). */
+    /** The footer text: "Powered by WeTracer" (its accessible name). */
     poweredBy: 'Powered by',
     brandName: 'WeTracer',
     removeFile: (name: string) => `Remove ${name}`,

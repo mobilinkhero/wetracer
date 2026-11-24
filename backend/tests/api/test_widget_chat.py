@@ -394,6 +394,275 @@ async def test_widget_chat_message(db, test_widget, test_ai_config, test_custome
     # A few concurrent chats would otherwise use up the connection pool
     assert held == [False]
 
+
+WELCOME_TEXT = "Hi! I can track orders or start a return — pick one."
+
+
+async def _send_first_widget_message(db, test_widget, test_ai_config, test_customer,
+                                     mock_sio, monkeypatch, text="Track my order",
+                                     seed_messages=None):
+    """Drive handle_widget_chat once on a fresh OPEN session, with the AI
+    mocked at the streaming seam (as in test_widget_chat_message).
+
+    `seed_messages` are stored in the session before the send (each a
+    create_message dict without session/organization/agent/customer ids, which
+    are filled in) — for driving a later turn, where a user message already
+    exists. Returns (session_id, reply_text). The mocked stream saves
+    nothing, so the only rows the handler itself stores are the ones the
+    welcome insert adds.
+    """
+    from app.api import widget_chat
+    from app.services import message_delivery
+
+    monkeypatch.setattr(widget_chat, "sio", mock_sio)
+    monkeypatch.setattr(widget_reply, "sio", mock_sio)
+    monkeypatch.setattr(host_action_runtime, "sio", mock_sio)
+    monkeypatch.setattr(message_delivery, "sio", mock_sio)
+    serve_socket_db(monkeypatch, db)
+
+    session_id = uuid4()
+    conversation_token = "test_token"
+    monkeypatch.setattr(
+        widget_chat,
+        "authenticate_socket_conversation_token",
+        AsyncMock(return_value=(str(test_widget.id), str(test_widget.organization_id),
+                                str(test_customer.id), conversation_token))
+    )
+    from app.repositories.session_to_agent import SessionToAgentRepository
+    SessionToAgentRepository(db).create_session(
+        session_id=session_id,
+        agent_id=test_widget.agent_id,
+        customer_id=test_customer.id,
+        organization_id=test_widget.organization_id
+    )
+    mock_sio.get_session.return_value = {
+        "widget_id": str(test_widget.id),
+        "org_id": str(test_widget.organization_id),
+        "agent_id": str(test_widget.agent_id),
+        "customer_id": str(test_customer.id),
+        "session_id": str(session_id),
+        "ai_config": test_ai_config,
+        "conversation_token": conversation_token
+    }
+    mock_sio.get_environ.return_value = {}
+
+    mock_session = MagicMock()
+    mock_session.session_id = session_id
+    mock_session.status = SessionStatus.OPEN
+    mock_session.user_id = None
+    mock_session.workflow_id = None
+    monkeypatch.setattr(
+        widget_chat,
+        "_own_session",
+        lambda session_repo, session, active_only=True: mock_session
+    )
+
+    for seed in seed_messages or []:
+        ChatRepository(db).create_message({
+            **seed,
+            "session_id": session_id,
+            "organization_id": test_widget.organization_id,
+            "agent_id": test_widget.agent_id,
+            "customer_id": test_customer.id,
+        })
+
+    mock_chat_agent = MagicMock()
+
+    async def _stream_events(*args, **kwargs):
+        yield {"type": "start", "source": "model-full",
+               "session_id": str(session_id), "message_id": None}
+        yield {"type": "done", "source": "model-full",
+               "session_id": str(session_id), "message_id": None}
+
+    from app.agents.chat_agent import ChatResponse
+    reply = ChatResponse(
+        message="Sure — I can track that order for you.",
+        transfer_to_human=False,
+        end_chat=False,
+        request_rating=False,
+        create_ticket=False,
+    )
+    mock_chat_agent.stream_response = _stream_events
+    mock_chat_agent.last_stream_response = reply
+    mock_chat_agent.last_paused_turn = None
+    mock_chat_agent.last_bot_message_id = None
+    mock_chat_agent.last_handover = None
+    mock_chat_agent.last_ui_extras = {}
+    mock_chat_agent.agent.session_id = session_id
+    mock_chat_agent.safe_cleanup_mcp_tools = AsyncMock()
+
+    # Mock workflow execution to avoid database errors
+    mock_workflow_execution = MagicMock()
+    mock_result = MagicMock()
+    mock_result.success = True
+    mock_result.message = "Sure — I can track that order for you."
+    mock_result.transfer_to_human = False
+    mock_result.end_chat = False
+    mock_result.form_data = None
+    mock_result.should_continue = True
+    mock_workflow_execution.execute_workflow = AsyncMock(return_value=mock_result)
+
+    with patch("app.services.widget_reply.ChatAgent.create_async", AsyncMock(return_value=mock_chat_agent)), \
+         patch("app.api.widget_chat.WorkflowExecutionService", return_value=mock_workflow_execution):
+        await widget_chat.handle_widget_chat("test_sid", {"message": text})
+
+    return session_id, reply.message
+
+
+def _set_welcome(db, test_agent, welcome):
+    """Give the agent a customization row carrying this welcome message."""
+    from app.models.agent import AgentCustomization
+    db.add(AgentCustomization(agent_id=test_agent.id, welcome_message=welcome))
+    db.commit()
+
+
+@pytest.mark.asyncio
+async def test_first_message_inserts_welcome_message_for_ai(
+    db, test_widget, test_agent, test_ai_config, test_customer, mock_sio, monkeypatch
+):
+    """The welcome message is stored as the conversation's first message, so
+    the AI's history starts with what the visitor is picking from."""
+    from app.api.widget_chat import WELCOME_MESSAGE_ATTRIBUTE
+
+    _set_welcome(db, test_agent, WELCOME_TEXT)
+    session_id, reply_text = await _send_first_widget_message(
+        db, test_widget, test_ai_config, test_customer, mock_sio, monkeypatch)
+
+    # The first reply still goes out normally.
+    emitted = [c[0][0] for c in mock_sio.emit.call_args_list]
+    assert 'error' not in emitted
+    assert 'chat_response' in emitted
+    chat_response = next(
+        c[0][1] for c in mock_sio.emit.call_args_list if c[0][0] == 'chat_response')
+    assert chat_response['message'] == reply_text
+
+    # The welcome is the only stored message so far (the mocked stream saves
+    # no user message): a bot message, flagged, carrying the exact text.
+    chat_repo = ChatRepository(db)
+    history = await chat_repo.get_session_history(session_id)
+    assert len(history) == 1
+    assert history[0].message == WELCOME_TEXT
+    assert history[0].message_type == 'bot'
+    assert history[0].attributes.get(WELCOME_MESSAGE_ATTRIBUTE) is True
+    assert history[0].attributes.get('source') == 'system'
+
+    # And it stays first once the visitor's message lands after it: the log
+    # shows it once as the opening bubble, not the StartState block (which
+    # only renders while the thread is empty).
+    chat_repo.create_message({
+        "message": "Track my order",
+        "message_type": "user",
+        "session_id": session_id,
+        "organization_id": test_widget.organization_id,
+        "agent_id": test_widget.agent_id,
+        "customer_id": test_customer.id,
+    })
+    history = await chat_repo.get_session_history(session_id)
+    assert [m.message_type for m in history] == ['bot', 'user']
+    assert history[0].message == WELCOME_TEXT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("welcome", [None, "", "   "])
+async def test_first_message_without_welcome_message_works_as_before(
+    db, test_widget, test_agent, test_ai_config, test_customer, mock_sio, monkeypatch, welcome
+):
+    """No welcome message set (missing, null, empty, whitespace-only): the
+    insertion is skipped cleanly and the chat works exactly as before — no
+    error event, no failed stream, a normal first reply, nothing stored."""
+    _set_welcome(db, test_agent, welcome)
+    session_id, reply_text = await _send_first_widget_message(
+        db, test_widget, test_ai_config, test_customer, mock_sio, monkeypatch)
+
+    emitted = [c[0][0] for c in mock_sio.emit.call_args_list]
+    assert 'error' not in emitted
+    assert 'chat_response' in emitted
+    chat_response = next(
+        c[0][1] for c in mock_sio.emit.call_args_list if c[0][0] == 'chat_response')
+    assert chat_response['message'] == reply_text
+
+    history = await ChatRepository(db).get_session_history(session_id)
+    assert history == []
+
+
+@pytest.mark.asyncio
+async def test_first_message_without_customization_row_works_as_before(
+    db, test_widget, test_agent, test_ai_config, test_customer, mock_sio, monkeypatch
+):
+    """No customization row at all on the agent: same as above — the handler
+    must not trip over the missing row."""
+    assert AgentRepository(db).get_agent(test_agent.id).customization is None
+    session_id, reply_text = await _send_first_widget_message(
+        db, test_widget, test_ai_config, test_customer, mock_sio, monkeypatch)
+
+    emitted = [c[0][0] for c in mock_sio.emit.call_args_list]
+    assert 'error' not in emitted
+    assert 'chat_response' in emitted
+    assert await ChatRepository(db).get_session_history(session_id) == []
+
+
+@pytest.mark.asyncio
+async def test_welcome_message_is_inserted_only_once(
+    db, test_widget, test_agent, test_ai_config, test_customer, mock_sio, monkeypatch
+):
+    """A retried first turn (the first was refused before the user message
+    was stored) and every later turn must not store the welcome again."""
+    from app.api.widget_chat import WELCOME_MESSAGE_ATTRIBUTE, _insert_welcome_message
+
+    _set_welcome(db, test_agent, WELCOME_TEXT)
+    session_id, _ = await _send_first_widget_message(
+        db, test_widget, test_ai_config, test_customer, mock_sio, monkeypatch)
+
+    # The flag guard: a second insert attempt for the same session is a no-op.
+    assert _insert_welcome_message(
+        db, session_id, test_widget.organization_id,
+        test_widget.agent_id, test_customer.id) is False
+    history = await ChatRepository(db).get_session_history(session_id)
+    assert len([m for m in history
+                if (m.attributes or {}).get(WELCOME_MESSAGE_ATTRIBUTE) is True]) == 1
+
+    # A later turn (a user message already exists, so this is not the first
+    # message) stores nothing either — the seeded welcome stays the only one.
+    session_id2, _ = await _send_first_widget_message(
+        db, test_widget, test_ai_config, test_customer, mock_sio, monkeypatch,
+        text="And the return?",
+        seed_messages=[
+            {"message": WELCOME_TEXT, "message_type": "bot",
+             "attributes": {"source": "system", WELCOME_MESSAGE_ATTRIBUTE: True}},
+            {"message": "Track my order", "message_type": "user"},
+        ])
+    history2 = await ChatRepository(db).get_session_history(session_id2)
+    assert len([m for m in history2
+                if (m.attributes or {}).get(WELCOME_MESSAGE_ATTRIBUTE) is True]) == 1
+
+
+@pytest.mark.asyncio
+async def test_welcome_message_reaches_ai_history(
+    db, test_widget, test_agent, test_ai_config, test_customer, mock_sio, monkeypatch
+):
+    """The history the lean streaming prompt is built from starts with the
+    welcome message, so the model knows what the visitor is picking from."""
+    from app.agents.chat_agent import ChatAgent
+
+    _set_welcome(db, test_agent, WELCOME_TEXT)
+    session_id, _ = await _send_first_widget_message(
+        db, test_widget, test_ai_config, test_customer, mock_sio, monkeypatch)
+    ChatRepository(db).create_message({
+        "message": "Track my order",
+        "message_type": "user",
+        "session_id": session_id,
+        "organization_id": test_widget.organization_id,
+        "agent_id": test_widget.agent_id,
+        "customer_id": test_customer.id,
+    })
+
+    history_text = await ChatAgent._compact_history(ChatRepository(db), str(session_id))
+    assert history_text is not None
+    assert f"Agent: {WELCOME_TEXT}" in history_text
+    assert "Visitor: Track my order" in history_text
+    assert history_text.index(f"Agent: {WELCOME_TEXT}") < history_text.index("Visitor: Track my order")
+
+
 @pytest.mark.asyncio
 async def test_human_only_agent_waits_instead_of_answering(
     db, test_widget, test_ai_config, test_customer, mock_sio, monkeypatch
