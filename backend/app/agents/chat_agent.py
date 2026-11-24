@@ -425,7 +425,10 @@ class ChatAgent(ChatAgentMCPMixin):
             You have access to the knowledge search tool. You can use this tool to search for information about the customer's query on product, services, policies, etc. Only use the tool if required, dont use it for general greeting. Dont hallucinate information. For all other queries other than general always search tools before answering.
 
             **IMPORTANT - Include URLs in Responses:**
-            When tools return information that includes URLs, product links, documentation links, or reference URLs, you MUST include these URLs in your response to the customer. URLs provide valuable references and allow customers to access more detailed information. Always preserve and share URLs that are relevant to the customer's query."""
+            When tools return information that includes URLs, product links, documentation links, or reference URLs, you MUST include these URLs in your response to the customer. URLs provide valuable references and allow customers to access more detailed information. Always preserve and share URLs that are relevant to the customer's query.
+
+            **IMPORTANT - Answer in your own words, never replay an article:**
+            When the tool returns information, answer in your own words from it — briefly, and only what the customer asked for. Never copy or paste article text into your reply, and never say you do not have the information when the tool returned something relevant."""
 
             # For non-Groq models, add the search limit instruction
             # For Groq, skip this to avoid discouraging tool usage
@@ -1742,8 +1745,15 @@ Keep your responses concise and focused. Provide clear, actionable information i
                  "with the team. Never invent URLs, prices, dates, phone "
                  "numbers, email addresses or other specific details."]
         if kb_context:
-            parts.append("Knowledge base context (use this to answer when "
-                         f"it is relevant):\n{kb_context}")
+            parts.append("Knowledge base background — use it only as "
+                         "background for your own answer, never as text to "
+                         f"repeat:\n{kb_context}")
+            parts.append("Answer in your own words from the background "
+                         "above, briefly and only about what the visitor "
+                         "asked. Never quote, copy or paste the background "
+                         "text, and never say you do not have the "
+                         "information when the background covers the "
+                         "question.")
         if history_text:
             parts.append("Recent conversation:\n" + history_text)
         return "\n\n".join(parts)
@@ -1778,18 +1788,6 @@ Keep your responses concise and focused. Provide clear, actionable information i
         if not seen_any:
             raise RuntimeError("Lean streaming run produced no content")
 
-    def _kb_chat_response(self, answer: str, source_name: str,
-                          source_type: str) -> ChatResponse:
-        """A ChatResponse for a KB instant answer (no model call)."""
-        from app.models.schemas.chat import SourceRef
-        response = ChatResponse(
-            message=answer, transfer_to_human=False, transfer_reason=None,
-            transfer_description=None, end_chat=False, end_chat_reason=None,
-            end_chat_description=None, request_rating=False, create_ticket=False,
-            shopify_output=None)
-        response.sources = [SourceRef(name=source_name, type=source_type)]
-        return response
-
     async def stream_response(self, message: str, session_id: str = None, org_id: str = None,
                               agent_id: str = None, customer_id: str = None,
                               user_attributes: dict = None, images: list = None,
@@ -1804,11 +1802,11 @@ Keep your responses concise and focused. Provide clear, actionable information i
         `self.last_stream_response` (None when the turn paused on a host
         action — then `self.last_paused_turn` holds the PausedTurn, as
         get_response returns it). The prelude mirrors get_response: guardrail
-        check, user-message store, then KB instant answer, lean stream, or
-        the full non-streaming turn as fallback.
+        check, user-message store, then KB context for the model, lean
+        stream, or the full non-streaming turn as fallback.
         """
         from types import SimpleNamespace
-        from app.services.kb_instant import find_kb_candidate
+        from app.services.kb_context import find_kb_context
 
         self.last_stream_response = None
         self.last_paused_turn = None
@@ -1876,54 +1874,30 @@ Keep your responses concise and focused. Provide clear, actionable information i
                 self._groq_json_capture.clear()
                 run_message = model_message or message
 
-                # --- KB instant answer (no model call) ---
-                kb_hit = None
-                if not force_model and not images and not attachments:
-                    kb_hit = await find_kb_candidate(agent_id, org_id, message)
-                if kb_hit is not None and kb_hit.confidence >= 0.5:
-                    response_content = self._kb_chat_response(
-                        kb_hit.answer, kb_hit.source_name, kb_hit.source_type)
-                    response_content.message, _ = check_output(
-                        response_content.message, ctx=self._guardrail_ctx,
-                        surface=self._guardrail_surface, session_id=session_id)
-                    response_content = ensure_nonempty_message(response_content)
-                    attributes = {
-                        "transfer_to_human": False, "transfer_reason": None,
-                        "transfer_description": None, "end_chat": False,
-                        "end_chat_reason": None, "end_chat_description": None,
-                        "request_rating": False, "shopify_output": None,
-                        "sources": [s.model_dump() for s in response_content.sources],
-                        "source": "kb",
-                    }
-                    self._store_bot_message(chat_repo, {
-                        "message": response_content.message, "message_type": "bot",
-                        "session_id": session_id, "organization_id": org_id,
-                        "agent_id": agent_id, "customer_id": customer_id,
-                        "attributes": attributes,
-                    })
-                    self.last_stream_response = response_content
-                    yield {"type": "start", "source": "kb", "session_id": session_id,
-                           "message_id": self.last_bot_message_id}
-                    yield {"type": "token", "delta": response_content.message,
-                           "source": "kb"}
-                    yield {"type": "done", "source": "kb", "session_id": session_id,
-                           "message_id": self.last_bot_message_id}
-                    return
-
-                # A near-miss KB article still grounds the lean model: paste
-                # it as context instead of paying for a tool round-trip.
-                # Needs >= 2 matched keywords, not just confidence: a lone
-                # shared word (e.g. "cancel" in a flight-booking question)
-                # once pasted the subscription-cancellation article as
-                # context and the model answered the flight question with
-                # subscription steps.
+                # --- KB context for the model ---
+                # The removed instant path answered by sending article text
+                # verbatim; the model now answers KB questions itself, with
+                # the top matching article as background only. Same gate as
+                # the old near-miss context (>= 0.25 confidence, >= 2 matched
+                # keywords): a lone shared word must not ground the answer.
+                # The context is background, never text to repeat — the
+                # own-words instruction lives in _lean_instructions.
+                # NOTE: force_model does NOT skip this lookup. It used to
+                # skip the instant answer; the widget and mobile streaming
+                # paths pass force_model=True on every turn, and the lean
+                # model has no search tool of its own — skipping the
+                # pre-paste would leave it with no KB grounding at all.
                 kb_context = None
-                if kb_hit is not None and kb_hit.confidence >= 0.25 \
-                        and len(kb_hit.matched_keywords) >= 2:
-                    kb_context = kb_hit.answer[:800]
-                    if self.knowledge_tool is not None:
-                        self.knowledge_tool.collected_sources = [
-                            {"name": kb_hit.source_name, "type": kb_hit.source_type}]
+                if not images and not attachments:
+                    kb_ctx = await find_kb_context(
+                        agent_id, org_id, message,
+                        knowledge_tool=self.knowledge_tool)
+                    if kb_ctx is not None:
+                        kb_context = kb_ctx.context
+                        if self.knowledge_tool is not None:
+                            self.knowledge_tool.collected_sources = [
+                                {"name": kb_ctx.source_name,
+                                 "type": kb_ctx.source_type}]
 
                 # --- Lean streaming turn ---
                 if self._stream_eligible(message, images, attachments):

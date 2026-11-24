@@ -51,7 +51,6 @@ from app.core.security import revoke_token, verify_conversation_token
 from app.database import get_db
 from app.models.chat_history import ChatHistory
 from app.repositories.chat import ChatRepository
-from app.services.kb_instant import find_kb_answer, find_kb_candidate
 from tests.api.test_streaming import (
     FakeStreamAgent,
     _headers,
@@ -372,60 +371,11 @@ def test_sse_client_disconnect_mid_stream_stores_no_partial_reply(
 
 # --- 3. Empty knowledge base -------------------------------------------------
 
-class _FakeKBTool:
-    """Stand-in for KnowledgeSearchByAgent: returns a canned rendering."""
-
-    def __init__(self, rendered=None, exc=None):
-        self.rendered = rendered
-        self.exc = exc
-        self.calls = []
-
-    def search_knowledge_base(self, query):
-        self.calls.append(query)
-        if self.exc is not None:
-            raise self.exc
-        return self.rendered
-
-
-@pytest.fixture
-def kb_tool(monkeypatch):
-    """Patch the tool class kb_instant constructs; returns the fake holder."""
-    holder = {}
-
-    class _Factory:
-        def __init__(self, agent_id=None, org_id=None, source=None):
-            fake = _FakeKBTool(
-                rendered=holder.get("rendered"), exc=holder.get("exc"))
-            holder["tool"] = fake
-            self.search_knowledge_base = fake.search_knowledge_base
-
-    monkeypatch.setattr(
-        "app.tools.knowledge_search_byagent.KnowledgeSearchByAgent", _Factory)
-    return holder
-
-
-@pytest.mark.asyncio
-async def test_empty_kb_lookup_returns_no_hit(kb_tool):
-    """No sources linked to the agent: both the gated answer lookup and
-    the ungated candidate lookup return None, so the turn falls through
-    to the model instead of answering from nothing."""
-    for rendered in (
-        "No knowledge sources available for this agent.",
-        "No relevant information found in the knowledge base.",
-    ):
-        kb_tool["rendered"] = rendered
-        kb_tool["exc"] = None
-        assert await find_kb_answer(
-            "agent-1", "org-1", "How do I reset my password?") is None
-        assert await find_kb_candidate(
-            "agent-1", "org-1", "How do I reset my password?") is None
-
-
 def test_sse_empty_kb_falls_through_to_model_stream(
         stream_client, test_widget, test_ai_config, edge_stream):
     """Wire level for a KB miss (empty KB): no `kb`-sourced event appears,
-    the full model stream runs instead, and the reply is stored. The KB
-    lookup itself is covered at the service level above."""
+    the full model stream runs instead, and the reply is stored. There is
+    no direct KB answer path: every turn goes to the model."""
     conv = _start(stream_client, test_widget)
     edge_stream["install"]([
         {"type": "start", "source": "model-stream",

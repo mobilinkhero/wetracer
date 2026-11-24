@@ -1,8 +1,11 @@
 # ChatterMate Streaming Protocol (v1)
 
-Live token-by-token AI replies + KB instant answers. Implemented 2026-11-25
+Live token-by-token AI replies. Implemented 2026-11-25
 (test mode). The non-streaming paths are unchanged and remain the fallback
-everywhere.
+everywhere. There is no direct KB answer path: every turn goes to the
+model, which answers from the knowledge base with its own search tool
+(the KB instant-answer fast path was removed 2026-11-25 — it sent article
+text back without understanding what the visitor actually asked).
 
 ## Provider: hosted only, configured by the owner
 
@@ -46,9 +49,9 @@ New events, all emitted to the conversation room (`session_id`):
 
 | Event | When | Payload |
 |---|---|---|
-| `chat_response_stream_start` | First token is about to be sent (or a KB instant answer is ready). If the client never sees this event for a turn, the turn fell back to non-streaming — just wait for `chat_response`. | `{"session_id": str, "source": "model-stream" \| "kb", "message_id": int \| null}` (`message_id` is set only for `kb`; for `model-stream` it arrives with the final `chat_response`) |
-| `chat_response_stream_token` | Each model token chunk (or the whole KB answer as one chunk). Append `delta` to the in-progress bubble. | `{"session_id": str, "delta": str, "source": "model-stream" \| "kb"}` |
-| `chat_response_stream_done` | Stream finished; the full reply is stored. The existing `chat_response` event follows immediately with the final payload (message id, quick replies, handover, sources, flags) — clients should keep the streamed text and let `chat_response` replace/confirm it, not render a second bubble. | `{"session_id": str, "source": "model-stream" \| "kb", "message_id": int \| null}` |
+| `chat_response_stream_start` | First token is about to be sent. If the client never sees this event for a turn, the turn fell back to non-streaming — just wait for `chat_response`. | `{"session_id": str, "source": "model-stream", "message_id": int \| null}` (`message_id` arrives with the final `chat_response`) |
+| `chat_response_stream_token` | Each model token chunk. Append `delta` to the in-progress bubble. | `{"session_id": str, "delta": str, "source": "model-stream"}` |
+| `chat_response_stream_done` | Stream finished; the full reply is stored. The existing `chat_response` event follows immediately with the final payload (message id, quick replies, handover, sources, flags) — clients should keep the streamed text and let `chat_response` replace/confirm it, not render a second bubble. | `{"session_id": str, "source": "model-stream", "message_id": int \| null}` |
 | `chat_response_stream_error` | Streaming failed mid-turn after `start` was sent. The server finishes and stores the partial text and the normal `chat_response` still arrives with it — the client should keep the partial text and wait for `chat_response`. If `chat_response` never arrives, show the generic retry error as before. | `{"session_id": str, "error": str}` |
 
 Existing events are unchanged: `bot_typing` still fires first, `chat_response`
@@ -61,7 +64,6 @@ POST /api/v1/mobile/conversations/{conversation_id}/messages/stream
 Headers: X-Conversation-Token: <visitor JWT>, X-Device-Id: <device id>
 Body: multipart form, same as POST .../messages (field `message`; NO files —
       uploads get 422 "use the non-streaming endpoint for files")
-Query: ?force_model=true skips the KB instant answer (testing only)
 Response: 200 text/event-stream
 ```
 
@@ -69,9 +71,9 @@ SSE lines (`event:` + `data:` JSON, blank line terminated):
 
 | SSE event | `data` JSON |
 |---|---|
-| `start` | `{"session_id": str, "source": "model-stream" \| "kb" \| "model-full", "message_id": int \| null}` |
-| `token` | `{"session_id": str, "delta": str, "source": "model-stream" \| "kb"}` |
-| `done` | Full reply payload, same shape as `reply_payload` in `app/services/widget_reply.py`: `{"message_id", "message", "type": "chat_response", "session_id", "transfer_to_human", "end_chat", "end_chat_reason", "end_chat_description", "request_rating", "shopify_output", "sources", "quick_replies", "handover", ...}` plus `"source": "model-stream" \| "kb" \| "model-full"` |
+| `start` | `{"session_id": str, "source": "model-stream" \| "model-full", "message_id": int \| null}` |
+| `token` | `{"session_id": str, "delta": str, "source": "model-stream"}` |
+| `done` | Full reply payload, same shape as `reply_payload` in `app/services/widget_reply.py`: `{"message_id", "message", "type": "chat_response", "session_id", "transfer_to_human", "end_chat", "end_chat_reason", "end_chat_description", "request_rating", "shopify_output", "sources", "quick_replies", "handover", ...}` plus `"source": "model-stream" \| "model-full"` |
 | `error` | `{"session_id": str, "error": str}` — sent when the turn fails. If a finished reply exists (mid-stream failure after partial text was completed and stored), `done` follows `error` with that reply; if no reply exists, `error` is terminal and no `done` follows. The HTTP status stays 200 because headers were already sent. |
 
 Non-SSE errors (before streaming starts) use normal HTTP codes, same as
@@ -92,29 +94,15 @@ Fallbacks on the SSE endpoint:
 The existing `POST .../messages` (JSON, whole reply) and
 `GET .../messages` (polling) are unchanged.
 
-## KB instant answers (`source: "kb"`)
+## Knowledge base: the model answers, never the article directly
 
-Before any model call, the server searches the agent's knowledge base for the
-visitor's question. On a high-confidence match it answers **from the article
-itself, with no model call**:
+There is no direct KB answer path. The server never sends article text
+back as the reply: every turn goes to the model, which searches the
+knowledge base with its own tool and answers in its own words, using
+the article as context. (An earlier fast path answered straight from a
+matched article with no model call; it was removed 2026-11-25 because
+it dumped article text without understanding what the visitor asked.)
 
-- Delivered through the same streaming channel as a complete message:
-  `start` (`source: "kb"`) → one `token` with the full answer text →
-  `done` (payload includes `"sources": [{"name": <article title>, "type": <source type>}]`).
-  The client renders it like any streamed reply; it may show a "from help
-  article" affordance when `source == "kb"`.
-- Confidence gate (see `app/services/kb_instant.py`): the vector search must
-  return a chunk **and** confidence must be at least 0.5 — the share of the
-  question's distinctive words found in the article title/text (a title word
-  counts extra, but only when at least 2 words match overall, so a single
-  shared word can never pass the gate on its own). This stops the vector
-  search's always-nearest hit from answering unrelated questions.
-  Low-confidence questions go to the model, which may still search the KB
-  with its own tool. A near miss (confidence ≥ 0.25 with at least 2 matched
-  keywords) is pasted as context for the lean model instead of being
-  answered verbatim.
-- KB answers never set `transfer_to_human`, `end_chat`, `request_rating`,
-  `create_ticket` or lead-capture flags.
 - **The knowledge base contains ONLY articles the owner adds** (plus the
   seeded test samples below). There is no self-learning from conversations:
   nothing mines past chats, messages or transcripts into KB entries, and no
@@ -177,8 +165,6 @@ sends it to the full agent instead.
    retry the POST.
 5. Never render `thinking`/reasoning content: the stream carries only the
    visitor-facing reply text.
-6. `source == "kb"` replies may be labelled as coming from a help article;
-   do not present them as live-agent/model answers.
 
 ## Verification (stub hosted provider — no live model, no key, no charges)
 
@@ -191,23 +177,14 @@ sends it to the full agent instead.
   0.46 s** (stub replay delay 50 ms/chunk; a hosted provider's own latency
   adds on top — no live-model timing is claimed here, because no live key
   exists in test mode).
-- KB instant answers verified live against the running backend over SSE and
-  the widget Socket.IO connection: all three seeded questions answered from
-  their articles with `source: "kb"` and TTFT ~0.3 s once the embedding
-  model was loaded in the backend process (the first KB search after a
-  restart takes ~5–16 s to load the embedding model on this box;
-  subsequent searches ~0.3 s).
-  A question sharing only one word with an article ("Can I cancel my flight
-  booking tomorrow?") correctly does NOT get a KB answer.
 - Unit tests (mocked at the seams, no model/DB/embedding):
-  `tests/services/test_kb_instant.py`, `tests/agent/test_chat_agent_streaming.py`,
+  `tests/agent/test_chat_agent_streaming.py`,
   `tests/agent/test_lean_stream_stub.py`, `tests/api/test_mobile_chat.py`,
-  `tests/api/test_streaming.py` — 71 passed.
+  `tests/api/test_streaming.py`.
 
 ## Files
 
 - Protocol: `docs/STREAMING-PROTOCOL.md` (this file)
-- KB instant answers: `backend/app/services/kb_instant.py`
 - Lean streaming + `ChatAgent.stream_response`: `backend/app/agents/chat_agent.py`
 - Widget wiring: `backend/app/api/widget_chat.py` (`handle_widget_chat`)
 - Mobile SSE: `backend/app/api/mobile_chat.py`

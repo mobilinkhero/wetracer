@@ -160,8 +160,14 @@ const sendExample = `curl -X POST ${apiBase}/mobile/conversations/<conversation_
           </p>
         </div>
 
-        <section class="card">
-          <h2>Your widgets</h2>
+        <section class="card card-full mobile-card">
+          <p class="eyebrow">Mobile integration</p>
+          <h2>Connect a mobile app</h2>
+          <p>
+            Your AI agents, inside your own mobile app — native chat over the public Chat API.
+            No WebView, no dashboard login in the app: the widget ID below is public, and every
+            call is authorised by a short-lived visitor token minted per conversation.
+          </p>
           <p v-if="loading">Loading your widgets…</p>
           <p v-else-if="loadError" class="error">{{ loadError }}</p>
           <template v-else-if="selectedWidget">
@@ -189,21 +195,51 @@ const sendExample = `curl -X POST ${apiBase}/mobile/conversations/<conversation_
               name="API base URL"
               :value="apiBase"
             />
-            <p class="widget-line">
-              Push (FCM):
-              <span v-if="fcmStatus === null">status unavailable</span>
-              <span v-else-if="fcmStatus.configured">
-                configured (project {{ fcmStatus.project_id }}) — pushes go out for real
+            <div class="status-row">
+              <span class="status-label">Push notifications (FCM)</span>
+              <span v-if="fcmStatus === null" class="status-badge is-unknown">
+                <span class="status-dot" />Unknown
               </span>
-              <span v-else>
-                not configured — test mode, pushes are recorded, not sent
+              <span v-else-if="fcmStatus.configured" class="status-badge is-live">
+                <span class="status-dot" />Live
               </span>
-            </p>
+              <span v-else class="status-badge is-test">
+                <span class="status-dot" />Test mode
+              </span>
+              <span v-if="fcmStatus === null" class="status-note">Status unavailable.</span>
+              <span v-else-if="fcmStatus.configured" class="status-note">
+                Pushes go out for real (project {{ fcmStatus.project_id }}).
+              </span>
+              <span v-else class="status-note">
+                Pushes are recorded, not sent. Add an FCM service account to send real pushes.
+              </span>
+            </div>
           </template>
           <p v-else>No widgets yet — create one from an AI agent first.</p>
+          <h3>Quick start</h3>
+          <ol class="steps quick-steps">
+            <li>
+              <strong>Start a conversation</strong> —
+              <code>POST /api/v1/mobile/conversations</code> with your widget ID. You get a
+              <code>conversation_id</code> and a 1-hour visitor token.
+              <a href="#authentication">See Authentication</a>
+            </li>
+            <li>
+              <strong>Send messages</strong> —
+              <code>POST /api/v1/mobile/conversations/{id}/messages</code> with the token as the
+              <code>X-Conversation-Token</code> header.
+              <a href="#endpoints">See Endpoints</a>
+            </li>
+            <li>
+              <strong>Receive live replies</strong> — connect to the Socket.IO
+              <code>/widget</code> namespace, or poll
+              <code>GET .../messages?after=&lt;message id&gt;</code>.
+              <a href="#live-replies">See Live replies</a>
+            </li>
+          </ol>
         </section>
 
-        <section class="card">
+        <section id="authentication" class="card card-full">
           <h2>Authentication</h2>
           <ol class="steps">
             <li>
@@ -233,7 +269,7 @@ const sendExample = `curl -X POST ${apiBase}/mobile/conversations/<conversation_
 #  "widget_id":"…","agent_name":"Media Test Support","created":true,"expires_in":3600}</pre>
         </section>
 
-        <section class="card">
+        <section id="endpoints" class="card card-full">
           <h2>Endpoints</h2>
           <table class="endpoint-table">
             <thead>
@@ -264,7 +300,7 @@ const sendExample = `curl -X POST ${apiBase}/mobile/conversations/<conversation_
             fails validation returns 422 and no message is stored. Never retry a send on
             timeout — poll instead, or the message goes twice.
           </p>
-          <h3>Live replies</h3>
+          <h3 id="live-replies">Live replies</h3>
           <p>
             Same host, namespace <code>/widget</code>, connect auth
             <code>{"conversation_token": "&lt;token&gt;"}</code>. The socket is receive-only —
@@ -274,7 +310,7 @@ const sendExample = `curl -X POST ${apiBase}/mobile/conversations/<conversation_
           </p>
         </section>
 
-        <section class="card">
+        <section class="card card-full">
           <h2>Rate limits &amp; errors</h2>
           <table class="endpoint-table">
             <thead>
@@ -299,7 +335,7 @@ const sendExample = `curl -X POST ${apiBase}/mobile/conversations/<conversation_
           </p>
         </section>
 
-        <section class="card">
+        <section class="card card-full">
           <h2>Build your own client</h2>
           <p>
             Any HTTP client can use the endpoints above — start a conversation, send
@@ -326,7 +362,7 @@ const sendExample = `curl -X POST ${apiBase}/mobile/conversations/<conversation_
 .settings-section {
   flex: 1;
   padding: var(--space-lg);
-  max-width: 960px;
+  max-width: 1120px;
 }
 
 .page-header {
@@ -394,6 +430,84 @@ const sendExample = `curl -X POST ${apiBase}/mobile/conversations/<conversation_
 .card h3 {
   font-size: 14px;
   margin: var(--space-md) 0 var(--space-sm);
+}
+
+/* Featured first card: the mobile integration, made obvious at a glance. */
+.mobile-card {
+  background: var(--accent-bg-06);
+  border-color: var(--accent-border);
+}
+
+.card .eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  margin: 0 0 4px;
+}
+
+/* FCM status: label + a no-wrap badge + a note that wraps cleanly on its
+   own line, so no sentence ever breaks mid-phrase. */
+.status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin-top: var(--space-md);
+}
+
+.status-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--o07);
+  border: 1px solid var(--o12);
+  color: var(--muted);
+}
+
+.status-badge.is-live {
+  background: var(--teal-bg-10);
+  border-color: var(--teal-border);
+  color: var(--c-teal);
+}
+
+.status-badge.is-test {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--warning-color);
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.status-note {
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.quick-steps li {
+  margin-bottom: 8px;
+}
+
+.quick-steps a {
+  color: var(--accent-ink);
+  white-space: nowrap;
 }
 
 .card p {

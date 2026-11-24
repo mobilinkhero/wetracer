@@ -1,14 +1,15 @@
 # ChatterMate Real-Time Replies — Setup Guide
 
 Fast, real-time AI replies in the chat widget and the mobile API: answers
-stream token by token so the visitor sees the first words in about a second,
-and questions that match a help article are answered instantly from that
-article, with no model call at all.
+stream token by token so the visitor sees the first words in about a second.
+Every turn is answered by the model, which searches your help articles and
+answers from them in its own words — the server never sends article text
+back as the reply.
 
 This is the operator's setup guide: how to connect your AI provider, how to
-add the help articles that power instant answers, what timings to expect,
+add the help articles that ground the model's answers, what timings to expect,
 and what to do when something is slow or silent. The wire-level protocol
-(Socket.IO events, the mobile SSE endpoint, the confidence gate, the lean
+(Socket.IO events, the mobile SSE endpoint, the lean
 agent) is documented in `docs/STREAMING-PROTOCOL.md`.
 
 ## 1. Connect your hosted AI provider
@@ -56,17 +57,19 @@ Notes:
 
 When a visitor sends a message, the server answers in this order:
 
-1. **Knowledge-base instant answer.** The server searches the agent's
-   knowledge base for the question. On a high-confidence match it answers
-   straight from the article — no model call, no waiting. See section 3.
-2. **Streamed model reply.** Otherwise a lean plain-text agent (short
+1. **Streamed model reply.** A lean plain-text agent (short
    system prompt, no tools, last 3 exchanges of history) streams the
    reply token by token from your configured provider. The visitor sees
    the first words in about a second and the rest as it is generated.
-3. **Full agent reply (fallback).** Some turns need the full agent —
+   Before the model runs, the server searches the agent's knowledge
+   base for the question and, when a matching article is found, pastes
+   it into the model prompt as background context — the model answers
+   in its own words, it never repeats article text verbatim. See section 3.
+2. **Full agent reply (fallback).** Some turns need the full agent —
    attachments, a human handover, opening a ticket, lead capture, a
    workflow, or a shop/host action. Those run the normal non-streaming
-   agent and the client receives one complete reply instead of a stream.
+   agent, which searches the knowledge base with its own tool, and the
+   client receives one complete reply instead of a stream.
    This is by design, not an error.
 
 Where the stream arrives:
@@ -93,13 +96,13 @@ end-chat). If the provider stream breaks mid-turn, the partial text is
 finished and stored the same way and the client still gets the finished
 reply.
 
-## 3. Knowledge-base instant answers — owner-added articles only
+## 3. Knowledge base — owner-added articles only
 
-Instant answers come only from help articles **you add** to the knowledge
-base. There is no automatic learning from past chats: nothing mines old
-conversations, messages, or transcripts into knowledge-base entries, and
-no "learn from chats" feature exists. If an article is not in the
-knowledge base, it can never be used for an instant answer.
+The model's answers are grounded only in help articles **you add** to the
+knowledge base. There is no automatic learning from past chats: nothing
+mines old conversations, messages, or transcripts into knowledge-base
+entries, and no "learn from chats" feature exists. If an article is not
+in the knowledge base, it can never ground an answer.
 
 ### Add articles in the dashboard
 
@@ -109,12 +112,11 @@ knowledge base, it can never be used for an instant answer.
    - **Sitemap** — crawl every URL in a sitemap.
    - **Document** — upload a PDF file (up to 25 MB).
    - **Text** — paste the content directly with a title.
-3. **Link the source to the agent.** Instant answers search only the
+3. **Link the source to the agent.** The model searches only the
    sources linked to that agent: in the knowledge base, attach the
    source to the agent (the link dialog says "Attach knowledge from your
    organization to this agent so it can use it"). An article that is
-   added but never linked to the agent will never produce an instant
-   answer.
+   added but never linked to the agent will never be used to answer.
 4. Wait for processing to finish. Pasted text is ready almost at once;
    crawled pages and PDFs are queued and processed in the background —
    check the queue status on the knowledge-base page before testing.
@@ -132,34 +134,31 @@ The same operations exist as API calls (`/api/v1/knowledge/...`):
 
 ### How matching works
 
-Before any model call, the server searches the agent's linked sources for
-the visitor's question. An instant answer is sent only when the match is
-confident: the article must share enough of the question's distinctive
-words (confidence at least 0.5; a word in the article title counts
-extra, and a single shared word can never pass on its own). Below that,
-the question goes to the model, which may still search the knowledge
-base with its own tool — and a near miss (confidence at least 0.25 with
-at least 2 matched keywords) is pasted into the model prompt as context
-instead of being answered verbatim.
+Before the model runs, the server searches the agent's linked sources for
+the visitor's question. When a match is found, the article is pasted into
+the model prompt as background context — the model answers in its own
+words, it never repeats article text verbatim. A match needs at least
+2 shared distinctive words (confidence at least 0.25); a single shared
+word is never enough to ground an answer. The full agent also searches
+the knowledge base with its own tool.
 
-Because the gate is strict, an unrelated question never gets an instant
-answer: for example, "Can I cancel my flight booking tomorrow?" does not
-match the "How to cancel your subscription" article, even though they
-share the word "cancel".
+Because the gate needs at least 2 shared words, an unrelated question
+never gets grounded in the wrong article: for example, "Can I cancel my
+flight booking tomorrow?" does not match the "How to cancel your
+subscription" article, even though they share the word "cancel".
 
 ### Writing articles that match well
 
 - Give each article a clear, question-like title ("How to reset your
   password", "Support hours", "How to cancel your subscription").
 - Put the answer in the first paragraph, in plain words, with the exact
-  facts (links, times, prices, deadlines). The instant answer is the
-  article text itself, up to 1,500 characters.
+  facts (links, times, prices, deadlines). The model answers from the
+  article in its own words.
 - One topic per article. A long page covering five topics matches worse
   than five focused articles.
-- Keep facts current. An instant answer repeats the article, so an
-  out-of-date article gives an out-of-date answer with no model to
-  correct it. Edit the article in the knowledge base when the facts
-  change.
+- Keep facts current. The model repeats the article's facts, so an
+  out-of-date article gives an out-of-date answer. Edit the article in
+  the knowledge base when the facts change.
 
 ### Test-only seeded articles
 
@@ -168,8 +167,8 @@ articles ("How to reset your password", "Support hours", "How to cancel
 your subscription") to the Media Test Support agent. Run it from
 `backend/` with `./venv/bin/python scripts/seed_test_kb.py`. It skips
 titles that already exist, so it is safe to re-run. These are sample
-texts for verifying instant answers — real articles must come from the
-owner.
+texts for verifying the model answers grounded in the KB — real articles
+must come from the owner.
 
 ## 4. Expected timings
 
@@ -179,14 +178,13 @@ notes). A real provider adds its own latency on top of these numbers.
 
 | Path | Time to first token / answer | Notes |
 |---|---|---|
-| Knowledge-base instant answer | ~0.3 s | Once warmed up. The first KB search after a backend restart takes ~5–16 s while the search index warms up; later searches are ~0.3 s. |
-| Streamed model reply | ~0.3 s to first token against the stub provider (0.46 s total for a short scripted reply) | With a real provider, expect roughly 1–2 s to the first token. Total time depends on reply length and the provider. |
+| Streamed model reply | ~0.3 s to first token against the stub provider (0.46 s total for a short scripted reply) | With a real provider, expect roughly 1–2 s to the first token. Total time depends on reply length and the provider. The first KB search after a backend restart takes ~5–16 s while the search index warms up; later searches are ~0.3 s. |
 | Full agent reply (fallback) | Longer — no streaming | Runs the full agent with tools and structured output; first words arrive only when the whole reply is ready. |
 
-If the knowledge base is empty, there are no instant answers at all and
-every question goes to the model — and with no articles to ground it,
-the model may invent facts (prices, links, hours). Add real articles
-before judging answer quality.
+Every question goes to the model, which answers from the knowledge base
+with its own search tool. If the knowledge base is empty, there are no
+articles to ground it, and the model may invent facts (prices, links,
+hours). Add real articles before judging answer quality.
 
 ## 5. Troubleshooting
 
@@ -214,30 +212,18 @@ whole reply at once.**
   event for a turn, the turn fell back — the client should just wait
   for `chat_response`, which still arrives.
 
-**Instant answers never fire, even for questions the articles cover.**
+**The model answers without using the articles, or invents facts.**
 
-- Is the article linked to the agent? Instant answers search only the
+- Is the article linked to the agent? The model searches only the
   agent's linked sources. Open the Knowledge base page and confirm the
   source is attached to that agent.
 - Has the source finished processing? Crawled pages and PDFs sit in
   the queue first — check the queue status (`GET
   /api/v1/knowledge/queue/{queue_id}`) or the knowledge-base page.
-- Is the question worded like the article? The confidence gate needs
-  at least 2 matched distinctive words and a 0.5 share. A vague or
-  one-word question will not match; rephrase it to name the subject.
-- Is the knowledge base empty for this agent? Then nothing can match —
-  add and link at least one article first.
+- Is the knowledge base empty for this agent? Then nothing can ground
+  the answer — add and link at least one article first.
 
-**Instant answers fire for the wrong question.**
-
-- Check which article matched: the reply's `sources` list names the
-  article. If the article's title or text shares words with unrelated
-  questions, tighten the title and keep the article to one topic.
-- The gate is deliberately strict (0.5 confidence, 2-word minimum),
-  so a wrong match means the article genuinely overlaps the question's
-  wording — fix the article, not the gate.
-
-**The first KB answer after a restart is slow (~5–16 s), then fast.**
+**The first KB search after a restart is slow (~5–16 s), then fast.**
 
 - Expected. The first search warms up the search index; later searches
   are ~0.3 s. If every KB search stays slow, check backend CPU/memory
@@ -275,14 +261,13 @@ whole reply at once.**
   KB, and provider errors are all logged with it.
 - Reproduce with one plain question ("How do I reset my password?")
   against the seeded test articles, and note whether the reply source
-  is `kb`, `model-stream`, or `model-full` (shown in the stream events
+  is `model-stream` or `model-full` (shown in the stream events
   and the SSE `done` payload). That tells you exactly which path ran.
 
 ## Reference
 
 - Protocol detail (events, SSE format, eligibility rules, verification
   results): `docs/STREAMING-PROTOCOL.md`
-- KB instant answers: `backend/app/services/kb_instant.py`
 - Lean streaming agent: `backend/app/agents/chat_agent.py`
   (`ChatAgent.stream_response`)
 - Widget wiring: `backend/app/api/widget_chat.py`

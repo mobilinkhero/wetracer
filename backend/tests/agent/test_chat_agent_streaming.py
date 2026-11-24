@@ -17,16 +17,17 @@ limitations under the License.
 """Unit tests for ChatAgent.stream_response (docs/STREAMING-PROTOCOL.md v1).
 
 Event protocol under test: start -> token* -> done, or error instead of
-done; KB instant answers (source "kb") emit the whole answer as one token
-with no model call; lean model turns (source "model-stream") emit one token
-per delta; ineligible/failed lean turns fall back to the full non-streaming
-turn (source "model-full": start + done, no tokens).
+done; lean model turns (source "model-stream") emit one token per delta;
+ineligible/failed lean turns fall back to the full non-streaming
+turn (source "model-full": start + done, no tokens). There is no direct
+KB answer path: every turn goes to the model, which answers from the KB
+with its own search tool.
 
 The agent is stubbed at the seams stream_response actually uses
-(guardrail verdict, DB session, KB candidate lookup, lean token generator,
+(guardrail verdict, DB session, lean token generator,
 full-turn runner) — no model, DB or embedding is touched. Live behaviour
 is covered by the stub hosted-provider server in backend/tests/stub_provider.py
-(verify_stub_stream.py) and the live SSE/KB checks against the running backend.
+(verify_stub_stream.py) and the live SSE checks against the running backend.
 """
 
 import pytest
@@ -34,7 +35,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.agents.chat_agent import ChatAgent, ChatResponse
-from app.services.kb_instant import KBHit
 
 
 def _reply(text):
@@ -139,65 +139,10 @@ def _types(events):
     return [e["type"] for e in events]
 
 
-# --- KB instant answer -------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_kb_hit_emits_start_token_done_with_no_model_call(agent, monkeypatch):
-    kb = KBHit(answer="Reset it from the sign-in page.", source_name="How to reset your password",
-               source_type="text", confidence=1.0, matched_keywords=["reset", "password"])
-    monkeypatch.setattr("app.services.kb_instant.find_kb_candidate",
-                        AsyncMock(return_value=kb))
-    lean = AsyncMock()
-    agent._lean_stream_tokens = lean
-    agent._arun = AsyncMock(side_effect=AssertionError("model must not run"))
-
-    events = await _collect(agent, message="How do I reset my password?")
-
-    assert _types(events) == ["start", "token", "done"]
-    assert events[0] == {"type": "start", "source": "kb", "session_id": "sess-1",
-                         "message_id": 777}
-    assert events[1] == {"type": "token", "delta": "Reset it from the sign-in page.",
-                         "source": "kb"}
-    assert events[2]["type"] == "done" and events[2]["source"] == "kb"
-    assert agent.last_stream_response.message == "Reset it from the sign-in page."
-    assert agent.last_stream_response.sources[0].name == "How to reset your password"
-    assert agent.last_stream_response.transfer_to_human is False
-    assert agent.last_stream_response.end_chat is False
-    assert agent.last_stream_response.request_rating is False
-    lean.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_kb_near_miss_grounds_lean_model_but_does_not_answer(agent, monkeypatch):
-    """Confidence 0.4 (< 0.5 gate, >= 0.25) with 2 matched keywords out of 5:
-    no instant answer, but the article text is pasted as lean context instead
-    of a tool round-trip. A single matched keyword is NOT enough context
-    (it once grounded a flight-booking question in the subscription article)."""
-    kb = KBHit(answer="Support is open 9am to 6pm PKT.", source_name="Support hours",
-               source_type="text", confidence=0.4, matched_keywords=["support", "open"])
-    monkeypatch.setattr("app.services.kb_instant.find_kb_candidate",
-                        AsyncMock(return_value=kb))
-    seen = {}
-
-    async def _lean(run_message, session_id, history_text, kb_context):
-        seen["kb_context"] = kb_context
-        yield "We are open "
-
-    agent._lean_stream_tokens = _lean
-    agent._finish_turn = AsyncMock(return_value=_reply("We are open 9-6."))
-
-    events = await _collect(agent, message="When is support open late at night on weekends?")
-    assert _types(events) == ["start", "token", "done"]
-    assert events[0]["source"] == "model-stream"
-    assert seen["kb_context"] == "Support is open 9am to 6pm PKT."
-
-
 # --- lean streaming ----------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_lean_stream_token_order_and_concatenation(agent, monkeypatch):
-    monkeypatch.setattr("app.services.kb_instant.find_kb_candidate",
-                        AsyncMock(return_value=None))
 
     async def _lean(run_message, session_id, history_text, kb_context):
         for piece in ["Hello ", "streamed ", "world"]:
@@ -225,8 +170,6 @@ async def test_lean_stream_token_order_and_concatenation(agent, monkeypatch):
 async def test_lean_stream_failure_before_first_token_falls_back_silently(agent, monkeypatch):
     """No token ever arrived: no start event, no error — the full turn
     answers and the client just sees start(model-full) + done."""
-    monkeypatch.setattr("app.services.kb_instant.find_kb_candidate",
-                        AsyncMock(return_value=None))
 
     async def _lean(run_message, session_id, history_text, kb_context):
         raise RuntimeError("provider hiccup")
@@ -247,8 +190,6 @@ async def test_lean_stream_failure_midway_keeps_partial_text_and_errors(agent, m
     """Tokens already sent: finish + store the partial text, emit error
     (no done). The widget then waits for chat_response with the finished
     reply; the SSE client treats error as terminal."""
-    monkeypatch.setattr("app.services.kb_instant.find_kb_candidate",
-                        AsyncMock(return_value=None))
 
     async def _lean(run_message, session_id, history_text, kb_context):
         yield "Partial "
@@ -266,8 +207,6 @@ async def test_lean_stream_failure_midway_keeps_partial_text_and_errors(agent, m
 
 @pytest.mark.asyncio
 async def test_lean_stream_empty_falls_back_to_full_turn(agent, monkeypatch):
-    monkeypatch.setattr("app.services.kb_instant.find_kb_candidate",
-                        AsyncMock(return_value=None))
 
     async def _lean(run_message, session_id, history_text, kb_context):
         if False:
@@ -285,8 +224,6 @@ async def test_lean_stream_empty_falls_back_to_full_turn(agent, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_human_request_is_ineligible_and_uses_full_turn(agent, monkeypatch):
-    monkeypatch.setattr("app.services.kb_instant.find_kb_candidate",
-                        AsyncMock(return_value=None))
     lean = AsyncMock()
     agent._lean_stream_tokens = lean
     agent._finish_turn = AsyncMock(return_value=_reply("Connecting you to a human."))
@@ -299,8 +236,6 @@ async def test_human_request_is_ineligible_and_uses_full_turn(agent, monkeypatch
 
 @pytest.mark.asyncio
 async def test_goodbye_is_ineligible(agent, monkeypatch):
-    monkeypatch.setattr("app.services.kb_instant.find_kb_candidate",
-                        AsyncMock(return_value=None))
     agent._finish_turn = AsyncMock(return_value=_reply("Goodbye!"))
     events = await _collect(agent, message="goodbye")
     assert [e.get("source") for e in events] == ["model-full", "model-full"]
@@ -308,8 +243,6 @@ async def test_goodbye_is_ineligible(agent, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_attachments_are_ineligible(agent, monkeypatch):
-    monkeypatch.setattr("app.services.kb_instant.find_kb_candidate",
-                        AsyncMock(return_value=None))
     lean = AsyncMock()
     agent._lean_stream_tokens = lean
     agent._finish_turn = AsyncMock(return_value=_reply("Got the file."))
@@ -341,8 +274,6 @@ def test_stream_eligible_matrix(agent):
 async def test_guardrail_block_answers_without_model(agent, monkeypatch):
     agent._verdict.block = True
     agent._verdict.reply = "That message was blocked."
-    monkeypatch.setattr("app.services.kb_instant.find_kb_candidate",
-                        AsyncMock(return_value=None))
     agent._arun = AsyncMock(side_effect=AssertionError("model must not run"))
 
     events = await _collect(agent, message="bad message")
@@ -354,8 +285,6 @@ async def test_guardrail_block_answers_without_model(agent, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_paused_turn_yields_done_paused_and_no_response(agent, monkeypatch):
-    monkeypatch.setattr("app.services.kb_instant.find_kb_candidate",
-                        AsyncMock(return_value=None))
     # Force the full-turn branch: lean ineligible via a host action.
     agent._host_action_functions = ["act"]
     paused = SimpleNamespace(action="ask_page")
@@ -371,8 +300,6 @@ async def test_paused_turn_yields_done_paused_and_no_response(agent, monkeypatch
 
 @pytest.mark.asyncio
 async def test_full_turn_failure_yields_error_event(agent, monkeypatch):
-    monkeypatch.setattr("app.services.kb_instant.find_kb_candidate",
-                        AsyncMock(return_value=None))
 
     async def _lean(run_message, session_id, history_text, kb_context):
         raise RuntimeError("lean down")

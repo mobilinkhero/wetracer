@@ -14,23 +14,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-"""KB instant answers: answer from a help article without a model call.
+"""KB context for the model: the top matching article as background for the
+model's own answer — never an article replay.
 
-Before the agent runs, search the agent's knowledge base (the same vector
-search the agent's knowledge tool uses) for the visitor's question. On a
-high-confidence match, return the article text as the reply — no model call,
-so the answer arrives in under a second instead of after a 20s–3min
-generation on this CPU-only box.
+This replaces the removed instant-answer path: it used to send article text
+to the visitor verbatim, with no model call, so a KB question got back
+almost half an article whether or not that was what the visitor asked.
+The model now answers KB questions itself, using the top matching article
+as background context only: it understands what the visitor is asking,
+answers briefly in its own words, and never quotes or pastes the article.
 
-Confidence gate: vector search always returns a nearest hit, even for an
-unrelated question, so a hit alone is not enough. The instant answer needs
-confidence >= 0.5 — the share of the question's distinctive words found in
-the article (two or more title words count extra, see _confidence). Below 0.5 the
-question goes to the model, which may still search the KB with its own tool;
-a near miss (confidence >= 0.25 with at least 2 matched keywords) is pasted
-as context for the lean model instead of being answered verbatim.
-
-Seeded test articles live in backend/scripts/seed_test_kb.py (test-only).
+Relevance gate: vector search always returns a nearest hit, even for an
+unrelated question, so a hit alone is not enough. The context needs
+confidence >= 0.25 — the share of the question's distinctive words found
+in the article — AND at least 2 matched keywords: a lone shared word (e.g.
+"cancel" in a flight-booking question) once pasted the
+subscription-cancellation article as context and the model answered the
+flight question with subscription steps. Below the gate the question goes
+to the model with no KB context, which may still search the KB with its
+own tool (the full agent carries KnowledgeSearchByAgent).
 """
 
 import asyncio
@@ -51,14 +53,19 @@ to of in on for with by at from as about into over after before between
 please tell me get give want need know like just very really also
 """.split())
 
-# A KB answer is rendered as-is, so keep it to a readable length.
-MAX_ANSWER_CHARS = 1500
+# A KB context is background for the model, not text to repeat: keep it to
+# one short passage so the model answers from it instead of echoing it.
+MAX_CONTEXT_CHARS = 800
+
+# Relevance gate for pasting context (see module docstring).
+MIN_CONFIDENCE = 0.25
+MIN_MATCHED_KEYWORDS = 2
 
 
 @dataclass
-class KBHit:
-    """A high-confidence KB answer, ready to send as the reply."""
-    answer: str
+class KBContext:
+    """The top KB article, trimmed to background for the model's answer."""
+    context: str
     source_name: str
     source_type: str
     confidence: float  # share of the question's keywords found in the article
@@ -89,8 +96,8 @@ def _confidence(question: str, title: str, body: str) -> tuple:
     # "cancel" in "Can I cancel my flight booking tomorrow?") must NOT floor
     # the score to 0.6, even when a second, incidental body word also
     # matches: "What time do the flight booking offices cancel?" matches
-    # 'cancel' (title) + 'time' (body), 2/5 = 0.4 — a near miss, not an
-    # instant answer. The question has to name the article's subject, not
+    # 'cancel' (title) + 'time' (body), 2/5 = 0.4 — a near miss, not a
+    # grounded answer. The question has to name the article's subject, not
     # share one word with it.
     title_hits = [w for w in q if w in title_words]
     score = len(matched) / len(q)
@@ -111,9 +118,8 @@ def _parse_rendered(rendered: str) -> Optional[tuple]:
     # The renderer joins several article blocks with "\n\n" (_PAGE_SEPARATOR
     # in knowledge_search_byagent.py), but only the FIRST block is the top
     # hit. Without this cut the (.*) body below swallows every following
-    # block, so the answer (and the near-miss context built from it) contains
-    # unrelated articles. Stop at the next block header: a blank line
-    # followed by "[TYPE - Name]".
+    # block, so the context contains unrelated articles. Stop at the next
+    # block header: a blank line followed by "[TYPE - Name]".
     first_block = re.split(
         r"\n\n\[(?=[A-Za-z]+\s*-\s)", rendered.strip(), maxsplit=1)[0]
     match = re.match(r"\[([A-Za-z]+)\s*-\s*([^\]|]+)(?:\s*\|[^]]*)?\]\s*(.*)",
@@ -126,52 +132,47 @@ def _parse_rendered(rendered: str) -> Optional[tuple]:
     return source_type, name, body
 
 
-async def find_kb_candidate(agent_id, org_id, question: str) -> Optional[KBHit]:
-    """The best KB article for `question` with its confidence, ungated.
+def _trim_context(body: str) -> str:
+    """Cap the context at MAX_CONTEXT_CHARS, cut at a word boundary."""
+    if len(body) <= MAX_CONTEXT_CHARS:
+        return body.strip()
+    return body[:MAX_CONTEXT_CHARS].rsplit(" ", 1)[0].strip() + "…"
 
-    Returns None when there is no KB, no hit, or the search fails. Callers
-    decide the gate: instant answer, context for the lean model, or nothing.
+
+async def find_kb_context(agent_id, org_id, question: str,
+                          knowledge_tool=None) -> Optional[KBContext]:
+    """The top KB article as background for the model's answer, or None.
+
+    Returns None when there is no KB, no hit, the search fails, or the hit
+    fails the relevance gate — the model then answers without KB context
+    (and may still search the KB with its own tool on the full-agent path).
+    When a tool is passed, the search runs on it so its citations
+    (collected_sources) cover what the model was shown; otherwise a
+    throwaway tool is built for the lookup.
     """
     if not agent_id or not org_id or not (question or "").strip():
         return None
     try:
-        from app.tools.knowledge_search_byagent import KnowledgeSearchByAgent
-        tool = KnowledgeSearchByAgent(agent_id=agent_id, org_id=org_id)
+        tool = knowledge_tool
+        if tool is None:
+            from app.tools.knowledge_search_byagent import KnowledgeSearchByAgent
+            tool = KnowledgeSearchByAgent(agent_id=agent_id, org_id=org_id)
         rendered = await asyncio.to_thread(tool.search_knowledge_base, question.strip())
     except Exception as e:
-        logger.warning(f"KB instant search failed, falling back to model: {e}")
+        logger.warning(f"KB context search failed, model answers without it: {e}")
         return None
     parsed = _parse_rendered(rendered)
     if parsed is None:
         return None
     source_type, name, body = parsed
     confidence, matched = _confidence(question, name, body)
-    answer = body.strip()
-    if len(answer) > MAX_ANSWER_CHARS:
-        answer = answer[:MAX_ANSWER_CHARS].rsplit(" ", 1)[0].strip() + "…"
-    return KBHit(answer=answer, source_name=name, source_type=source_type,
-                  confidence=confidence, matched_keywords=matched)
-
-
-async def find_kb_answer(agent_id, org_id, question: str,
-                         min_confidence: float = 0.5) -> Optional[KBHit]:
-    """High-confidence KB answer for `question`, or None to use the model.
-
-    The gate is confidence only: the share of the question's distinctive
-    words found in the article must be at least `min_confidence` (default
-    0.5). A hit with 2 matched words out of 5 (0.4) is NOT an instant
-    answer — it is a near miss the lean model may use as context — while
-    2 out of 3 (0.67) is. Anything below the gate goes to the model, which
-    may still search the KB with its own tool.
-    """
-    hit = await find_kb_candidate(agent_id, org_id, question)
-    if hit is None:
-        return None
-    if hit.confidence < min_confidence:
+    if confidence < MIN_CONFIDENCE or len(matched) < MIN_MATCHED_KEYWORDS:
         logger.debug(
-            f"KB hit '{hit.source_name}' rejected: confidence {hit.confidence:.2f}, "
-            f"matched {hit.matched_keywords} for question {question[:60]!r}")
+            f"KB context '{name}' rejected: confidence {confidence:.2f}, "
+            f"matched {matched} for question {question[:60]!r}")
         return None
-    logger.info(f"KB instant answer from '{hit.source_name}' "
-                f"(confidence {hit.confidence:.2f}, matched {hit.matched_keywords})")
-    return hit
+    logger.info(f"KB context from '{name}' "
+                f"(confidence {confidence:.2f}, matched {matched})")
+    return KBContext(context=_trim_context(body), source_name=name,
+                     source_type=source_type, confidence=confidence,
+                     matched_keywords=matched)

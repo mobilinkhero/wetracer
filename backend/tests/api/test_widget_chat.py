@@ -318,19 +318,36 @@ async def test_widget_chat_message(db, test_widget, test_ai_config, test_custome
         "message": "Hello, how can I help you?"
     }
     
-    # Mock ChatAgent
+    # Mock ChatAgent. The handler streams (stream_response), so the mock
+    # must provide the streaming seam: an async generator of stream events,
+    # the finished reply on last_stream_response, and no paused turn.
+    # (A bare MagicMock auto-creates a truthy last_paused_turn, which sends
+    # the handler down the paused-turn path and crashes on empty rows.)
     mock_chat_agent = MagicMock()
     held = []
 
-    async def reply(*args, **kwargs):
+    async def _stream_events(*args, **kwargs):
         # Whether the handler's session sat on a connection through the model call
         held.append(db.in_transaction())
-        return MagicMock(
-            message="I'm here to help!",
-            transfer_to_human=False,
-            shopify_output=MagicMock(model_dump=MagicMock(return_value={}))
-        )
-    mock_chat_agent.get_response = AsyncMock(side_effect=reply)
+        yield {"type": "start", "source": "model-full",
+               "session_id": str(session_id), "message_id": None}
+        yield {"type": "done", "source": "model-full",
+               "session_id": str(session_id), "message_id": None}
+
+    from app.agents.chat_agent import ChatResponse
+    reply = ChatResponse(
+        message="I'm here to help!",
+        transfer_to_human=False,
+        end_chat=False,
+        request_rating=False,
+        create_ticket=False,
+    )
+    mock_chat_agent.stream_response = _stream_events
+    mock_chat_agent.last_stream_response = reply
+    mock_chat_agent.last_paused_turn = None
+    mock_chat_agent.last_bot_message_id = None
+    mock_chat_agent.last_handover = None
+    mock_chat_agent.last_ui_extras = {}
     mock_chat_agent.agent.session_id = session_id
     mock_chat_agent.safe_cleanup_mcp_tools = AsyncMock()
 

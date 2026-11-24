@@ -5,6 +5,28 @@
 > Verified 2026-11-23 against the live backend + backend test suite
 > (test_mobile_chat 21 passed, test_mobile_admin 5 passed).
 
+## Mobile app (native, no WebView)
+
+This doc **is** the mobile integration: native chat in your iOS/Android
+app over the public Chat API — raw REST + Socket.IO, any stack, no
+WebView, no SDK required. (The other way to integrate is the website
+widget script — not covered here.)
+
+Three things needed: (1) **Widget ID (public)** — from Settings → API
+Docs; (2) **API base URL** — your server origin, routes under `/api/v1`;
+(3) **visitor JWT** — minted by `POST /api/v1/mobile/conversations`
+(1 hour), sent as `X-Conversation-Token`, rotated with `POST
+.../conversations/{id}/rotate` before it lapses. No login, no API key
+in the app.
+
+Steps in order: (1) copy widget ID + API base URL from Settings → API
+Docs; (2) `POST /mobile/conversations` with `{"widget_id": "<id>"}`,
+store `conversation_id` + `conversation_token`; (3) send with `POST
+.../conversations/{id}/messages`; (4) live replies via Socket.IO
+`/widget` (or poll `GET .../messages`, or SSE `POST .../messages/stream`
+for token-by-token); (5) optional push via `POST .../devices` (needs
+admin FCM config); (6) rotate hourly, resume with the stored token.
+
 ## ChatterMate Chat API
 
 > Chat with a ChatterMate AI agent from a mobile app without a WebView.

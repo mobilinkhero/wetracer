@@ -332,30 +332,6 @@ def _wait_for(collected, event, timeout=90, count=1):
 
 # --- mobile SSE -------------------------------------------------------------
 
-def test_mobile_sse_kb_hit_no_model_call(stub, stub_ai_config):
-    """KB hit: start(kb) -> one token with the article -> done; the stub
-    provider is never called (no model call at all)."""
-    stub.deltas = list(SHORT_DELTAS)
-    before = len(stub.requests)
-    conv, device_id = _start(stub_ai_config=stub_ai_config)
-    events, ttft, total = _stream_sse(
-        conv, conv["conversation_token"], device_id,
-        "How do I reset my password?")
-
-    assert [n for n, _ in events] == ["start", "token", "done"]
-    assert events[0][1]["source"] == "kb"
-    assert events[0][1]["message_id"] is not None
-    assert "Forgot password" in events[1][1]["delta"]
-    done = events[-1][1]
-    assert done["source"] == "kb"
-    assert "Forgot password" in done["message"]
-    assert any(s.get("name") == "How to reset your password"
-               for s in (done.get("sources") or [])), done
-    assert ttft is not None and ttft < 15, f"KB TTFT too slow: {ttft}"
-    assert total < 30
-    assert len(stub.requests) == before, "KB hit must not call the model"
-
-
 def test_mobile_sse_kb_miss_streams_from_stub(stub, stub_ai_config):
     """KB miss: the question shares no keywords with any article, so the
     lean model streams token by token from the stub provider."""
@@ -505,39 +481,6 @@ def test_mobile_nonstreaming_fallback_still_works(stub, stub_ai_config):
 
 
 # --- widget Socket.IO -------------------------------------------------------
-
-def test_widget_socket_kb_hit_streams(stub, stub_ai_config):
-    """Widget socket end to end: KB question -> bot_typing, stream start /
-    token / done (source kb), then exactly one chat_response with sources."""
-    stub.deltas = list(SHORT_DELTAS)
-    before = len(stub.requests)
-    conv, device_id = _start(stub_ai_config=stub_ai_config)
-    client, collected = _socket_client(conv["conversation_token"])
-    try:
-        _wait_for(collected, "session_initialized", timeout=15)
-        client.emit("chat", {"message": "How do I reset my password?"},
-                    namespace="/widget")
-        _wait_for(collected, "chat_response", timeout=60)
-    finally:
-        client.disconnect()
-
-    names = [n for n, _ in collected["events"]]
-    assert "bot_typing" in names
-    assert names.index("bot_typing") < names.index("chat_response_stream_start")
-    assert names.index("chat_response_stream_start") < names.index(
-        "chat_response_stream_token") < names.index(
-        "chat_response_stream_done") < names.index("chat_response")
-    assert names.count("chat_response") == 1
-    start = next(d for n, d in collected["events"]
-                 if n == "chat_response_stream_start")
-    assert start["source"] == "kb"
-    assert start["message_id"] is not None
-    final = next(d for n, d in collected["events"] if n == "chat_response")
-    assert "Forgot password" in final["message"]
-    assert any(s.get("name") == "How to reset your password"
-               for s in (final.get("sources") or [])), final
-    assert len(stub.requests) == before, "KB hit must not call the model"
-
 
 def test_widget_socket_drop_mid_stream_then_reconnect(stub, stub_ai_config):
     """Connection drop mid-stream: disconnect after the first token, then

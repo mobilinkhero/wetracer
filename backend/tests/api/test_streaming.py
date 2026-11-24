@@ -210,7 +210,7 @@ def _stream(client, conv, message="Hello"):
 def test_sse_event_format():
     assert mobile_chat._sse("token", {"delta": "hi"}) == \
         'event: token\ndata: {"delta": "hi"}\n\n'
-    assert mobile_chat._sse("done", {"message": "x", "source": "kb"}).endswith("\n\n")
+    assert mobile_chat._sse("done", {"message": "x", "source": "model-stream"}).endswith("\n\n")
 
 
 # --- SSE: model stream ---------------------------------------------------------
@@ -244,27 +244,6 @@ def test_sse_model_stream_token_order(stream_client, test_widget, test_ai_config
         headers=_headers(conv["conversation_token"])).json()["messages"]
     assert [m["sender"] for m in history] == ["visitor", "ai"]
     assert history[1]["text"] == "Hello streamed world"
-
-
-def test_sse_kb_hit_is_one_token_with_sources(stream_client, test_widget, test_ai_config, fake_stream):
-    conv = _start(stream_client, test_widget)
-    fake_stream["install"]([
-        {"type": "start", "source": "kb", "session_id": conv["conversation_id"],
-         "message_id": 4242},
-        {"type": "token", "delta": "Reset it from the sign-in page.", "source": "kb"},
-        {"type": "done", "source": "kb", "session_id": conv["conversation_id"],
-         "message_id": 4242},
-    ], "Reset it from the sign-in page.", message_id=4242)
-
-    events = _stream(stream_client, conv, "How do I reset my password?")
-
-    assert [name for name, _ in events] == ["start", "token", "done"]
-    assert events[0][1]["source"] == "kb"
-    assert events[0][1]["message_id"] == 4242
-    assert events[1][1]["delta"] == "Reset it from the sign-in page."
-    done = events[-1][1]
-    assert done["source"] == "kb"
-    assert done["message"] == "Reset it from the sign-in page."
 
 
 def test_sse_model_full_fallback_has_no_tokens(stream_client, test_widget, test_ai_config, fake_stream):
@@ -492,40 +471,6 @@ async def test_widget_socket_streams_tokens_then_final_reply(
     assert final["type"] == "chat_response"
     # One bubble: the streamed text is confirmed by chat_response, not doubled.
     assert [n for n in names if n == "chat_response"] == ["chat_response"]
-
-
-@pytest.mark.asyncio
-async def test_widget_socket_kb_hit_is_one_token(widget_session, mock_sio, monkeypatch):
-    session_id = widget_session["session_id"]
-    response = ChatResponse(message="Reset it from the sign-in page.",
-                            transfer_to_human=False, end_chat=False,
-                            request_rating=False, create_ticket=False)
-    from app.models.schemas.chat import SourceRef
-    response.sources = [SourceRef(name="How to reset your password", type="text")]
-    fake = FakeWidgetStreamAgent(str(session_id), [
-        {"type": "start", "source": "kb", "session_id": str(session_id),
-         "message_id": 555},
-        {"type": "token", "delta": "Reset it from the sign-in page.", "source": "kb"},
-        {"type": "done", "source": "kb", "session_id": str(session_id),
-         "message_id": 555},
-    ], response)
-    monkeypatch.setattr(widget_chat, "create_widget_agent",
-                        AsyncMock(return_value=fake))
-
-    await widget_chat.handle_widget_chat(
-        "test_sid", {"message": "How do I reset my password?"})
-
-    emitted = _emitted(mock_sio)
-    names = [name for name, _ in emitted]
-    assert names == ["bot_typing", "chat_response_stream_start",
-                     "chat_response_stream_token", "chat_response_stream_done",
-                     "chat_response"]
-    assert emitted[1][1]["source"] == "kb"
-    assert emitted[1][1]["message_id"] == 555
-    final = emitted[-1][1]
-    assert final["message"] == "Reset it from the sign-in page."
-    assert final["sources"][0]["name"] == "How to reset your password"
-    assert final["sources"][0]["type"] == "text"
 
 
 @pytest.mark.asyncio

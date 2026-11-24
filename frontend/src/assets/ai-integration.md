@@ -16,6 +16,56 @@
 > Where the earlier API contract (v1) disagrees with the code, the code
 > wins — see "Contract corrections" at the end.
 
+## Mobile app — the native path (no WebView)
+
+This guide **is** the mobile integration. There are two ways to put
+ChatterMate chat in front of your customers:
+
+- **Mobile app (this guide):** native chat inside your iOS/Android app
+  over the public Chat API below — raw REST + Socket.IO, any stack
+  (Flutter, React Native, native Swift/Kotlin, or plain HTTP). No
+  WebView, no SDK required. A chat started in the app shows up in the
+  dashboard inbox, and a human can take it over there.
+- **Website widget:** embed the chat bubble on a website with the
+  widget script (see the dashboard widget settings) — not covered here.
+
+What the mobile path is: your app talks to the same widget your website
+uses, as a *widget visitor*. Three things are needed, nothing else:
+
+1. **Widget ID (public)** — the id of your chat widget, from the
+   dashboard under Settings → API Docs ("Connect a mobile app"). It is public,
+   not a secret; the app sends it with every start call.
+2. **API base URL** — your server origin (dev: `http://localhost:8000`,
+   production: the origin that serves the dashboard, e.g.
+   `https://app.chatcati.com`). All routes live under `/api/v1`.
+3. **Visitor JWT flow** — the app never logs in and never holds an API
+   key. `POST /api/v1/mobile/conversations` mints a short-lived signed
+   visitor JWT (1 hour, `expires_in: 3600`); the app sends it as
+   `X-Conversation-Token` on every later call and rotates it with
+   `POST .../conversations/{id}/rotate` before it lapses.
+
+Steps in order:
+
+1. Copy the **widget ID** and **API base URL** from Settings → API Docs.
+2. `POST /api/v1/mobile/conversations` with `{"widget_id": "<id>"}` —
+   store the returned `conversation_id` + `conversation_token`
+   securely on device (they survive app restarts).
+3. Send messages with `POST
+   /api/v1/mobile/conversations/{id}/messages` (REST, multipart —
+   text and/or files).
+4. Get the AI reply live: connect to Socket.IO namespace `/widget`
+   with `{"conversation_token": "<token>"}` (receive-only), or poll
+   `GET .../messages?after=<last id>`; for token-by-token replies use
+   `POST .../messages/stream` (SSE, text-only).
+5. Optional: register the device for push with `POST
+   .../conversations/{id}/devices` (needs FCM configured by an admin in
+   the dashboard first — test mode records pushes instead of sending).
+6. Before the hour is up, rotate the token (`POST .../rotate`); to
+   resume later, `POST /conversations` with the stored token.
+
+The rest of this guide is the detail for each step: §0 the facts,
+§1 the auth flow, §2 every endpoint, §3 errors, §4 limits/security.
+
 ## 0. Facts you need first
 
 - **Base URL (dev):** `http://localhost:8000`. Production: the same origin
@@ -70,6 +120,7 @@ curl -X POST http://localhost:8000/api/v1/mobile/conversations \
 | `POST` | `/api/v1/mobile/conversations/{id}/rotate` | Revoke + re-mint the token for the same conversation. |
 | `GET` | `/api/v1/mobile/conversations/{id}/messages?after=&limit=` | History / polling fallback. `after` = last message id seen; `limit` default 50, max 100. |
 | `POST` | `/api/v1/mobile/conversations/{id}/messages` | Send text and/or files (`multipart/form-data`). |
+| `POST` | `/api/v1/mobile/conversations/{id}/messages/stream` | AI reply as a token stream (SSE, text-only; files → 422). Events: `start` / `token` / `done` / `error`. See `docs/STREAMING-PROTOCOL.md`. |
 | `POST` | `/api/v1/mobile/conversations/{id}/devices` | Register an FCM token for push. |
 | `GET` | `/api/v1/mobile/push-attempts?conversation_id=` | Push decisions (debug / test mode). |
 | `POST`/`GET` | `/api/v1/admin/mobile/fcm-config` | **Admin only** (dashboard auth): store / check FCM service-account JSON. Never from the app. |

@@ -75,6 +75,19 @@ say "Rebuilding frontend + widget"
 # Regenerate .env.prod from the recorded public URL so the build bakes in the
 # right API/WS/widget origins even if install.sh was last run with another one.
 PUBLIC_URL="$(grep -E '^public_url=' "$INSTALL_DIR/.install-state" 2>/dev/null | cut -d= -f2 || true)"
+if [ -z "$PUBLIC_URL" ]; then
+    # .install-state is missing or has no public_url — fall back to the URL
+    # recorded in the previous .env.prod (its VITE_WIDGET_URL is the public
+    # URL) so the rebuild does not silently reuse a stale file.
+    if [ -f "$INSTALL_DIR/frontend/.env.prod" ]; then
+        PUBLIC_URL="$(grep -E '^VITE_WIDGET_URL=' "$INSTALL_DIR/frontend/.env.prod" 2>/dev/null | cut -d= -f2 || true)"
+    fi
+    if [ -n "$PUBLIC_URL" ]; then
+        echo "  ! WARNING: .install-state is missing or has no public_url — falling back to the URL recorded in frontend/.env.prod ($PUBLIC_URL). Re-run install.sh to record the correct public URL." >&2
+    else
+        echo "  ! WARNING: .install-state is missing or has no public_url, and frontend/.env.prod has no recorded URL either — the build will reuse the existing .env.prod as-is, if any." >&2
+    fi
+fi
 if [ -n "$PUBLIC_URL" ]; then
     PUBLIC_HOST="${PUBLIC_URL#*://}"
     case "$PUBLIC_URL" in https://*) WS_SCHEME="wss" ;; *) WS_SCHEME="ws" ;; esac
@@ -117,6 +130,24 @@ fi
 
 say "Restarting services"
 systemctl restart chattermate-backend
+# Worker services (knowledge-processor, ticket-investigator, crm-sync):
+# install any missing unit from the repo so new services arrive without a
+# reinstall, then restart them so they run the new code.
+for worker in knowledge-processor ticket-investigator crm-sync; do
+    unit_src="$INSTALL_DIR/deploy/systemd/chattermate-$worker.service"
+    if [ -f "$unit_src" ]; then
+        render_template "$unit_src" "/etc/systemd/system/chattermate-$worker.service" \
+            INSTALL_DIR "$INSTALL_DIR" APP_USER "$APP_USER"
+        systemctl enable "chattermate-$worker" >/dev/null 2>&1 || true
+    fi
+done
+systemctl daemon-reload
+for worker in knowledge-processor ticket-investigator crm-sync; do
+    if [ -f "/etc/systemd/system/chattermate-$worker.service" ]; then
+        systemctl restart "chattermate-$worker"
+        echo "  ✓ chattermate-$worker restarted"
+    fi
+done
 nginx -t && systemctl reload-or-restart nginx
 
 say "Waiting for the backend to answer"

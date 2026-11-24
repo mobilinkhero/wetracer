@@ -471,14 +471,29 @@ fi
 chown -R "$APP_USER:$APP_USER" "$INSTALL_DIR/frontend/dist" "$INSTALL_DIR/backend/assets"
 
 # ------------------------------------------------------ systemd services --
-say "Installing systemd services (backend, auto-start on boot)"
+say "Installing systemd services (backend + workers, auto-start on boot)"
 render_template "$INSTALL_DIR/deploy/systemd/chattermate-backend.service" \
     /etc/systemd/system/chattermate-backend.service \
     INSTALL_DIR "$INSTALL_DIR" APP_USER "$APP_USER"
+# Background workers run as their own services so they auto-start on boot
+# with no manual retry: knowledge-processor (KB crawl/PDF ingestion + FAQ),
+# ticket-investigator (AI ticket investigation + lifecycle), crm-sync
+# (lead push to HubSpot/Pipedrive). Without them, knowledge sources sit in
+# PENDING forever and tickets/CRM never sync.
+for worker in knowledge-processor ticket-investigator crm-sync; do
+    render_template "$INSTALL_DIR/deploy/systemd/chattermate-$worker.service" \
+        "/etc/systemd/system/chattermate-$worker.service" \
+        INSTALL_DIR "$INSTALL_DIR" APP_USER "$APP_USER"
+done
 run_quiet systemctl daemon-reload
 run_quiet systemctl enable chattermate-backend
 run_quiet systemctl restart chattermate-backend
 ok "chattermate-backend enabled and started"
+for worker in knowledge-processor ticket-investigator crm-sync; do
+    run_quiet systemctl enable "chattermate-$worker"
+    run_quiet systemctl restart "chattermate-$worker"
+    ok "chattermate-$worker enabled and started"
+done
 
 # ---------------------------------------------------------------- nginx ----
 say "Configuring nginx (frontend on /, API + widget on the backend)"

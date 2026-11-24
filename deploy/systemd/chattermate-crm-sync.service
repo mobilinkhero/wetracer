@@ -1,0 +1,25 @@
+# ChatterMate CRM sync — installed by install.sh into
+# /etc/systemd/system/chattermate-crm-sync.service.
+# __INSTALL_DIR__ and __APP_USER__ are replaced at install time.
+# Runs the CRM sync loop and the token refresh loop (lead push to
+# HubSpot / Pipedrive). Without this service, CRM sync never runs.
+[Unit]
+Description=ChatterMate CRM sync (lead push to HubSpot / Pipedrive)
+After=network-online.target postgresql.service redis-server.service chattermate-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__INSTALL_DIR__/backend
+Environment=PYTHONUNBUFFERED=1
+Environment=no_proxy=localhost,127.0.0.1
+Environment=NO_PROXY=localhost,127.0.0.1
+EnvironmentFile=__INSTALL_DIR__/backend/.env
+ExecStart=__INSTALL_DIR__/backend/venv/bin/python -m app.workers.crm_sync
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

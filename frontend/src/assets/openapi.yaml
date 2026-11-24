@@ -35,6 +35,12 @@ info:
     user: it authenticates with a short-lived signed visitor JWT minted by
     `POST /api/v1/mobile/conversations` and sent as `X-Conversation-Token`.
 
+    Mobile integration in three steps: (1) copy the widget ID and API
+    base URL from Settings → API Docs; (2) `POST
+    /api/v1/mobile/conversations` to mint a visitor JWT; (3) send over
+    REST, receive live over Socket.IO `/widget` (or the SSE stream
+    endpoint). Full guide: `docs/AI-INTEGRATION.md`.
+
     The widget id is **public** — it is the id of the chat widget on the
     website, shown in the dashboard under Settings → API Docs. Secret API
     keys are server-side only and must never ship in an app binary.
@@ -60,12 +66,12 @@ servers:
     description: Hosted ChatterMate
 tags:
   - name: mobile
-    description: Public visitor endpoints (conversation token only).
+    description: Mobile app — public visitor endpoints for the native mobile path (conversation token only). No WebView, no SDK required.
   - name: mobile-admin
     description: >
-      Org-admin endpoints (dashboard auth only). Never called from an app.
+      Mobile admin surface — org-admin endpoints (dashboard auth only). Never called from an app.
   - name: realtime
-    description: Socket.IO live replies on namespace `/widget` (not REST).
+    description: Mobile live replies — Socket.IO on namespace `/widget` (not REST). Receive-only for mobile.
 security:
   - ConversationToken: []
 paths:
@@ -73,7 +79,7 @@ paths:
     post:
       tags: [mobile]
       operationId: startConversation
-      summary: Start or resume a conversation
+      summary: 'Mobile: start or resume a conversation'
       description: |
         Mints the visitor JWT for a widget. Pass `conversation_token` with a
         stored token to resume: if it names a live (open/transferred)
@@ -146,7 +152,7 @@ paths:
     post:
       tags: [mobile]
       operationId: rotateConversationToken
-      summary: Rotate the visitor JWT
+      summary: 'Mobile: rotate the visitor JWT'
       description: |
         Revokes the presented token (its id is deleted from Redis) and mints
         a fresh 1-hour token for the same conversation + widget + device.
@@ -182,7 +188,7 @@ paths:
     get:
       tags: [mobile]
       operationId: listMessages
-      summary: Read messages (history / polling fallback)
+      summary: 'Mobile: read messages (history / polling fallback)'
       description: |
         Full history when `after` is omitted; only messages with an id
         greater than `after` when it is given. Poll at most once every
@@ -248,7 +254,7 @@ paths:
     post:
       tags: [mobile]
       operationId: sendMessage
-      summary: Send a message (+ files)
+      summary: 'Mobile: send a message (+ files)'
       description: |
         Runs the same AI turn the web widget runs (same agent, same model,
         same media understanding): images are seen by the model, PDF / text /
@@ -356,11 +362,98 @@ paths:
                     detail: AI configuration required
         '429':
           $ref: '#/components/responses/RateLimited'
+  /api/v1/mobile/conversations/{conversation_id}/messages/stream:
+    post:
+      tags: [mobile]
+      operationId: streamMessage
+      summary: 'Mobile: stream an AI reply (SSE, text-only)'
+      description: |
+        The same AI turn as `POST .../messages`, delivered token by token
+        over Server-Sent Events — the mobile way to show a live reply
+        without the `/widget` socket. Same auth, rate limits, quotas and
+        guards as the non-streaming send, but text-only: files get 422
+        (use `POST .../messages` for uploads), and the human /
+        transferred / workflow branches get 409 (they have no streamed
+        reply — use the non-streaming endpoint). Events: `start` /
+        `token` / `done`, or `error` instead of `done` when the turn
+        fails. A turn the lean agent cannot take emits a single `start`
+        (source `model-full`), no tokens, then `done` with the complete
+        reply — a client that only handles `done` still works. Full
+        protocol: `docs/STREAMING-PROTOCOL.md`.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  description: The visitor's message text. Empty → 422.
+      responses:
+        '200':
+          description: SSE stream of `start` / `token` / `done` (or `error`) events.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  One `event: <name>` + `data: <JSON>` frame per line pair,
+                  blank-terminated. `start` carries `source` + `message_id`;
+                  `token` carries `delta`; `done` carries the final reply
+                  payload; `error` carries `error` instead of `done`.
+              example: |
+                event: start
+                data: {"session_id": "1bf5844c-…", "source": "model-stream", "message_id": 22}
+
+                event: token
+                data: {"session_id": "1bf5844c-…", "delta": "Your order ", "source": "model-stream"}
+
+                event: done
+                data: {"session_id": "1bf5844c-…", "message": {"id": 22, "sender": "ai", "text": "Your order ORD-78412 totals $129.99.", "message_type": "bot", "attachments": [], "created_at": "…", "user_name": null, "agent_name": "Media Test Support"}, "ai_reply_pending": false, "source": "model-stream"}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ConversationNotFound'
+        '409':
+          description: No streamed reply for this conversation (human takeover / transferred / workflow) — use POST .../messages instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: This conversation has no streamed reply right now; use POST /conversations/{id}/messages instead
+        '410':
+          description: Conversation is closed; start a new one.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: Conversation is closed; start a new one
+        '422':
+          description: Empty message, or files were attached (files are not supported on the streaming endpoint).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                empty:
+                  value:
+                    detail: Message text is required
+                files:
+                  value:
+                    detail: Files are not supported on the streaming endpoint; use POST /conversations/{id}/messages instead
+        '429':
+          $ref: '#/components/responses/RateLimited'
   /api/v1/mobile/conversations/{conversation_id}/devices:
     post:
       tags: [mobile]
       operationId: registerDevice
-      summary: Register a device for push
+      summary: 'Mobile: register a device for push'
       description: |
         Upsert by (`conversation_id`, `push_token`): re-registering the same
         token refreshes it and never creates a duplicate row. When an AI or
@@ -426,7 +519,7 @@ paths:
     get:
       tags: [mobile]
       operationId: listPushAttempts
-      summary: Push attempts (debug / test mode)
+      summary: 'Mobile: push attempts (debug / test mode)'
       description: |
         Every push decision for a conversation, newest first (max 100).
         `status` is `sent` (FCM accepted it), `failed` (FCM rejected it —

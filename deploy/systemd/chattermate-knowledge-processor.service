@@ -1,0 +1,26 @@
+# ChatterMate knowledge processor — installed by install.sh into
+# /etc/systemd/system/chattermate-knowledge-processor.service.
+# __INSTALL_DIR__ and __APP_USER__ are replaced at install time.
+# Picks up PENDING rows from the knowledge_queue table (website crawls,
+# PDFs, sitemaps) and runs the FAQ loop. Without this service, knowledge
+# sources sit in PENDING forever — the backend never processes the queue.
+[Unit]
+Description=ChatterMate knowledge processor (KB crawl/PDF ingestion + FAQ jobs)
+After=network-online.target postgresql.service redis-server.service chattermate-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__INSTALL_DIR__/backend
+Environment=PYTHONUNBUFFERED=1
+Environment=no_proxy=localhost,127.0.0.1
+Environment=NO_PROXY=localhost,127.0.0.1
+EnvironmentFile=__INSTALL_DIR__/backend/.env
+ExecStart=__INSTALL_DIR__/backend/venv/bin/python -m app.workers.knowledge_processor
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

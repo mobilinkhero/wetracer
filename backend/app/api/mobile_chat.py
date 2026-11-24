@@ -897,7 +897,6 @@ async def send_message_stream(
     conversation_id: str,
     request: Request,
     token: Optional[str] = Header(None, alias=TOKEN_HEADER),
-    force_model: bool = Query(False, description="Skip the KB instant answer and force the model path (testing)"),
     db: Session = Depends(get_db),
 ):
     """The AI turn as a token stream (SSE). Same auth, rate limits, quotas
@@ -1001,10 +1000,13 @@ async def send_message_stream(
                 widget_agent_kwargs(session_dict, host_actions, journey_hint))
             saw_error = False
             last_source = "model-full"
+            # No KB instant answers: every turn goes to the model, which
+            # answers from the KB with its own search tool instead of the
+            # server sending article text back directly.
             async for stream_event in chat_agent.stream_response(
                     message=message, session_id=chat_agent.agent.session_id,
                     org_id=org_id, agent_id=session_dict["agent_id"],
-                    customer_id=customer_id, force_model=force_model):
+                    customer_id=customer_id, force_model=True):
                 event_type = stream_event.get("type")
                 last_source = stream_event.get("source", last_source)
                 if event_type == "start":

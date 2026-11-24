@@ -791,6 +791,9 @@ async def handle_widget_chat(sid, data):
                 # capture, ...) yields no token events — just a done with
                 # source model-full — and the client waits for chat_response.
                 response = None
+                # No KB instant answers: every turn goes to the model, which
+                # answers from the KB with its own search tool instead of
+                # the server sending article text back directly.
                 async for stream_event in chat_agent.stream_response(
                         message=message,
                         model_message=model_message,
@@ -799,7 +802,8 @@ async def handle_widget_chat(sid, data):
                         session_id=chat_agent.agent.session_id,
                         org_id=org_id,
                         agent_id=session['agent_id'],
-                        customer_id=customer_id):
+                        customer_id=customer_id,
+                        force_model=True):
                     event_type = stream_event.get("type")
                     if event_type == "start":
                         await sio.emit('chat_response_stream_start', {
