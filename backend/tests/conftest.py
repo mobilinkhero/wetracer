@@ -177,6 +177,37 @@ def app_sessions_use_the_test_database(monkeypatch):
     monkeypatch.setattr(database, "engine", engine)
 
 
+# The sessionmaker app code imports at module level. It is bound to the
+# engine settings point at when the app was imported — with ENV_FILE=/dev/null
+# (this harness) that is the LIVE dev Postgres
+# (postgresql+psycopg://test:test@localhost:5432/chattermate). Patching
+# database.engine above does NOT rebind it.
+_LIVE_SESSION_LOCAL = database.SessionLocal
+
+
+@pytest.fixture(autouse=True)
+def app_session_local_uses_the_test_database(monkeypatch):
+    """Any app code that calls SessionLocal() directly (chat_agent,
+    knowledge_base, mobile_chat, widget_history, embedder, ...) must get
+    the test database, never the live dev Postgres above. Point
+    database.SessionLocal, and every already-imported module-level copy of
+    it, at a sessionmaker bound to the test engine. A test that patches a
+    module's SessionLocal itself still wins: its patch applies in the test
+    body, after this fixture."""
+    import sys
+    test_session_local = sessionmaker(autocommit=False, autoflush=False,
+                                      bind=engine)
+    monkeypatch.setattr(database, "SessionLocal", test_session_local)
+    for mod in list(sys.modules.values()):
+        if mod is None:
+            continue
+        try:
+            if getattr(mod, "SessionLocal", None) is _LIVE_SESSION_LOCAL:
+                monkeypatch.setattr(mod, "SessionLocal", test_session_local)
+        except Exception:
+            continue
+
+
 @pytest.fixture(autouse=True)
 def shopify_legacy_tokens_stay_put(monkeypatch):
     """Most Shopify tests build a store with a plain (non-expiring) token and

@@ -44,7 +44,6 @@ import requests
 import socketio
 from sqlalchemy import text
 
-from app.core.security import encrypt_api_key
 from app.database import SessionLocal
 from app.models.agent import AgentType
 from app.models.schemas.widget import WidgetCreate
@@ -96,10 +95,22 @@ _CREATED = []  # (conversation_id, customer_id) for teardown cleanup
 
 # --- fixtures ---------------------------------------------------------------
 
+# Fixed stub port: whoever owns the AI config points the test org at this
+# URL in advance (OPENAI_COMPATIBLE / stub-model, settings.base_url below).
+# The live tests NEVER write ai_configs themselves — see stub_ai_config.
+STUB_PORT = 18099
+
+
 @pytest.fixture(scope="module")
 def stub():
-    server = StubProviderServer(deltas=list(SHORT_DELTAS), chunk_delay=0.05)
-    server.start()
+    server = StubProviderServer(
+        deltas=list(SHORT_DELTAS), chunk_delay=0.05, port=STUB_PORT)
+    try:
+        server.start()
+    except OSError:
+        pytest.skip(
+            f"stub port {STUB_PORT} already in use — another stub server "
+            "is running; refusing to share it")
     yield server
     server.stop()
 
@@ -119,68 +130,45 @@ def media_org():
 
 @pytest.fixture(scope="module")
 def stub_ai_config(stub, media_org):
-    """Point the test org at the stub provider; restore afterwards.
+    """READ-ONLY guard: verify the test org already points at this run's
+    stub provider, and skip otherwise. This fixture NEVER writes
+    ai_configs — no update, no insert, no delete.
 
-    NOTE 2026-11-25: the Media Test Org AI config row is GONE (the table
-    is now empty — live chat currently refuses with 'AI configuration
-    required' until a hosted key is configured). So this fixture creates
-    the stub row when none exists and deletes it afterwards; if a row does
-    exist it is saved and restored.
+    Why: the previous version of this fixture switched the org's config to
+    the stub and restored it afterwards (and deleted the stub row it had
+    inserted when none existed). That mutates shared live state: under
+    concurrent runs it could clobber another run's config, and its
+    teardown deleted the only active config present, which is what broke
+    live widget chat at 2026-11-24 19:56 UTC (the regression saw
+    ai_config_missing right after this fixture's teardown ran). The AI
+    config belongs to the owner / the live-verification agent alone.
+
+    To run this suite: the live-verification agent points Media Test Org's
+    active AI config at the stub — model_type OPENAI_COMPATIBLE,
+    model_name 'stub-model', settings {"base_url": stub.base_url}, i.e.
+    http://127.0.0.1:18099/v1 — and points it back afterwards.
     """
     org_id = media_org
     with SessionLocal() as db:
         row = db.execute(text(
-            "select model_type, model_name, settings, encrypted_api_key "
+            "select model_type, model_name, settings "
             "from ai_configs where organization_id = :o and is_active"),
             {"o": org_id}).first()
-        original = None
-        if row is not None:
-            original = {
-                "model_type": row[0],
-                "model_name": row[1],
-                "settings": row[2],
-                "encrypted_api_key": row[3],
-            }
-            new_settings = dict(row[2] or {})
-            new_settings["base_url"] = stub.base_url
-            db.execute(text(
-                "update ai_configs set model_type = 'OPENAI_COMPATIBLE', "
-                "model_name = 'stub-model', settings = cast(:s as json), "
-                "encrypted_api_key = :k where organization_id = :o and is_active"),
-                {"s": json.dumps(new_settings),
-                 "k": encrypt_api_key("stub-test-key"),
-                 "o": org_id})
-        else:
-            db.execute(text(
-                "insert into ai_configs (organization_id, model_type, "
-                "model_name, encrypted_api_key, settings, is_active) "
-                "values (:o, 'OPENAI_COMPATIBLE', 'stub-model', :k, "
-                "cast(:s as json), true)"),
-                {"o": org_id,
-                 "k": encrypt_api_key("stub-test-key"),
-                 "s": json.dumps({"base_url": stub.base_url})})
-        db.commit()
-        check = db.execute(text(
-            "select model_type, model_name from ai_configs "
-            "where organization_id = :o and is_active"),
-            {"o": org_id}).first()
-        assert check[0] == "OPENAI_COMPATIBLE", check
+    if row is None:
+        pytest.skip(
+            "no active AI config for Media Test Org — the live-verification "
+            "agent owns AI config; point it at the stub to run the live suite")
+    model_type, model_name, settings = row
+    base_url = (settings or {}).get("base_url")
+    if model_name != "stub-model" or base_url != stub.base_url:
+        pytest.skip(
+            f"active AI config is {model_type}/{model_name} "
+            f"(base_url={base_url}), not this run's stub provider "
+            f"({stub.base_url}) — refusing to switch it; the "
+            "live-verification agent owns AI config")
     yield stub
-    with SessionLocal() as db:
-        if original is not None:
-            old_settings = original["settings"]
-            db.execute(text(
-                "update ai_configs set model_type = :t, model_name = :m, "
-                "settings = cast(:s as json), encrypted_api_key = :k "
-                "where organization_id = :o and is_active"),
-                {"t": original["model_type"], "m": original["model_name"],
-                 "s": json.dumps(old_settings) if old_settings is not None else None,
-                 "k": original["encrypted_api_key"], "o": org_id})
-        else:
-            db.execute(text(
-                "delete from ai_configs where organization_id = :o "
-                "and model_name = 'stub-model'"), {"o": org_id})
-        db.commit()
+    # Teardown intentionally does nothing: this fixture writes nothing,
+    # so there is nothing to restore and nothing that can delete a config.
 
 
 @pytest.fixture(scope="module", autouse=True)

@@ -7,10 +7,8 @@ everywhere.
 ## Provider: hosted only, configured by the owner
 
 The AI comes only from the hosted provider the owner configures in the
-dashboard. There is no local or self-hosted model anywhere in this work:
-nothing downloads, serves, warms or keeps alive a model on this machine,
-and no model name, URL or keep-alive setting for a local model appears in
-the code or this doc.
+dashboard. Nothing in this work downloads, serves, warms, or keeps alive
+any model on this machine.
 
 How the provider is resolved: the dashboard stores the owner's AI config
 (`ai_configs` — provider/model, base URL where applicable, encrypted key);
@@ -217,4 +215,4 @@ sends it to the full agent instead.
 - Test KB seed: `backend/scripts/seed_test_kb.py`
 - Stub hosted-provider server + tests: `backend/tests/stub_provider.py`,
   `backend/tests/agent/test_lean_stream_stub.py`
-- Stack start (no local model started): `~/workspace/chattermate-pgdata/start-all.sh`
+- Stack start: `~/workspace/chattermate-pgdata/start-all.sh`

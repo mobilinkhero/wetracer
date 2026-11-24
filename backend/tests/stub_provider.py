@@ -45,10 +45,15 @@ class StubProviderServer:
     """An OpenAI-compatible chat-completions server replaying scripted deltas."""
 
     def __init__(self, deltas=None, chunk_delay: float = 0.05,
-                 model: str = "stub-model"):
+                 model: str = "stub-model", port: int = 0):
         self.deltas = list(deltas or ["Hello ", "streamed ", "world"])
         self.chunk_delay = chunk_delay
         self.model = model
+        # 0 = ephemeral (default, as before). A fixed port lets whoever owns
+        # the AI config point an org at this stub in advance — the live
+        # streaming tests use STUB_PORT for exactly that (they never write
+        # ai_configs themselves; see tests_live/test_streaming_live.py).
+        self.port = port
         self.requests = []  # parsed JSON bodies received, in order
         self._httpd = None
         self._thread = None
@@ -124,7 +129,7 @@ class StubProviderServer:
                 self.wfile.write(b"0\r\n\r\n")
                 self.wfile.flush()
 
-        self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        self._httpd = ThreadingHTTPServer(("127.0.0.1", self.port), _Handler)
         self._thread = threading.Thread(target=self._httpd.serve_forever,
                                         kwargs={"poll_interval": 0.05},
                                         daemon=True)

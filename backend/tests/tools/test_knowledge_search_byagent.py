@@ -396,7 +396,8 @@ def test_real_search_knowledge_base_with_results():
     with patch('app.tools.knowledge_search_byagent.SessionLocal') as mock_session_local, \
          patch('app.tools.knowledge_search_byagent.KnowledgeRepository') as mock_knowledge_repo_class, \
          patch('app.tools.knowledge_search_byagent.PgVector') as mock_pg_vector, \
-         patch('app.tools.knowledge_search_byagent.AgentKnowledge') as mock_agent_knowledge_class:
+         patch('app.tools.knowledge_search_byagent.AgentKnowledge') as mock_agent_knowledge_class, \
+         patch('app.tools.knowledge_search_byagent.get_embedder') as mock_embedder_class:
 
         # Setup mocks for initialization
         mock_db = MagicMock()
@@ -471,7 +472,8 @@ def test_real_search_knowledge_base_with_source_filter():
     with patch('app.tools.knowledge_search_byagent.SessionLocal') as mock_session_local, \
          patch('app.tools.knowledge_search_byagent.KnowledgeRepository') as mock_knowledge_repo_class, \
          patch('app.tools.knowledge_search_byagent.PgVector') as mock_pg_vector, \
-         patch('app.tools.knowledge_search_byagent.AgentKnowledge') as mock_agent_knowledge_class:
+         patch('app.tools.knowledge_search_byagent.AgentKnowledge') as mock_agent_knowledge_class, \
+         patch('app.tools.knowledge_search_byagent.get_embedder') as mock_embedder_class:
 
         # Setup mocks for initialization
         mock_db = MagicMock()
@@ -530,7 +532,8 @@ def test_real_search_knowledge_base_no_content_docs():
     with patch('app.tools.knowledge_search_byagent.SessionLocal') as mock_session_local, \
          patch('app.tools.knowledge_search_byagent.KnowledgeRepository') as mock_knowledge_repo_class, \
          patch('app.tools.knowledge_search_byagent.PgVector') as mock_pg_vector, \
-         patch('app.tools.knowledge_search_byagent.AgentKnowledge') as mock_agent_knowledge_class:
+         patch('app.tools.knowledge_search_byagent.AgentKnowledge') as mock_agent_knowledge_class, \
+         patch('app.tools.knowledge_search_byagent.get_embedder') as mock_embedder_class:
 
         # Setup mocks
         mock_db = MagicMock()
@@ -586,7 +589,8 @@ def test_real_search_knowledge_base_unknown_source_type():
     with patch('app.tools.knowledge_search_byagent.SessionLocal') as mock_session_local, \
          patch('app.tools.knowledge_search_byagent.KnowledgeRepository') as mock_knowledge_repo_class, \
          patch('app.tools.knowledge_search_byagent.PgVector') as mock_pg_vector, \
-         patch('app.tools.knowledge_search_byagent.AgentKnowledge') as mock_agent_knowledge_class:
+         patch('app.tools.knowledge_search_byagent.AgentKnowledge') as mock_agent_knowledge_class, \
+         patch('app.tools.knowledge_search_byagent.get_embedder') as mock_embedder_class:
 
         # Setup mocks
         mock_db = MagicMock()
@@ -638,7 +642,8 @@ def test_real_search_knowledge_base_document_without_score():
     with patch('app.tools.knowledge_search_byagent.SessionLocal') as mock_session_local, \
          patch('app.tools.knowledge_search_byagent.KnowledgeRepository') as mock_knowledge_repo_class, \
          patch('app.tools.knowledge_search_byagent.PgVector') as mock_pg_vector, \
-         patch('app.tools.knowledge_search_byagent.AgentKnowledge') as mock_agent_knowledge_class:
+         patch('app.tools.knowledge_search_byagent.AgentKnowledge') as mock_agent_knowledge_class, \
+         patch('app.tools.knowledge_search_byagent.get_embedder') as mock_embedder_class:
 
         # Setup mocks
         mock_db = MagicMock()

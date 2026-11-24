@@ -25,7 +25,7 @@ generation on this CPU-only box.
 Confidence gate: vector search always returns a nearest hit, even for an
 unrelated question, so a hit alone is not enough. The instant answer needs
 confidence >= 0.5 — the share of the question's distinctive words found in
-the article (a title word counts extra, see _confidence). Below 0.5 the
+the article (two or more title words count extra, see _confidence). Below 0.5 the
 question goes to the model, which may still search the KB with its own tool;
 a near miss (confidence >= 0.25 with at least 2 matched keywords) is pasted
 as context for the lean model instead of being answered verbatim.
@@ -74,8 +74,9 @@ def _confidence(question: str, title: str, body: str) -> tuple:
     """(confidence, matched keywords) for a candidate article.
 
     Confidence is the share of the question's distinctive words that appear
-    in the article title or text. Title words count double: a question that
-    names the article's subject is a match even if the body words differ.
+    in the article title or text. Two or more title words floor the score
+    at 0.6: a question that names the article's subject is a match even if
+    the body words differ.
     """
     q = _keywords(question)
     if not q:
@@ -83,13 +84,17 @@ def _confidence(question: str, title: str, body: str) -> tuple:
     title_words = _keywords(title)
     body_words = _keywords(body)
     matched = [w for w in q if w in title_words or w in body_words]
-    # Title hit: a question word in the title is strong evidence — but only
-    # when at least two question words match overall. A single shared word
-    # (e.g. "cancel" in "Can I cancel my flight booking tomorrow?") must
-    # NOT floor the score to 0.6 and pass the gate for an unrelated article.
+    # Title hit: question words in the title are strong evidence — but the
+    # floor needs at least TWO title words. A single title word (e.g.
+    # "cancel" in "Can I cancel my flight booking tomorrow?") must NOT floor
+    # the score to 0.6, even when a second, incidental body word also
+    # matches: "What time do the flight booking offices cancel?" matches
+    # 'cancel' (title) + 'time' (body), 2/5 = 0.4 — a near miss, not an
+    # instant answer. The question has to name the article's subject, not
+    # share one word with it.
     title_hits = [w for w in q if w in title_words]
     score = len(matched) / len(q)
-    if title_hits and len(matched) >= 2:
+    if len(title_hits) >= 2:
         score = max(score, 0.6)
     return score, matched
 
@@ -103,8 +108,16 @@ def _parse_rendered(rendered: str) -> Optional[tuple]:
     if not rendered or "No relevant information" in rendered \
             or "No further results" in rendered:
         return None
+    # The renderer joins several article blocks with "\n\n" (_PAGE_SEPARATOR
+    # in knowledge_search_byagent.py), but only the FIRST block is the top
+    # hit. Without this cut the (.*) body below swallows every following
+    # block, so the answer (and the near-miss context built from it) contains
+    # unrelated articles. Stop at the next block header: a blank line
+    # followed by "[TYPE - Name]".
+    first_block = re.split(
+        r"\n\n\[(?=[A-Za-z]+\s*-\s)", rendered.strip(), maxsplit=1)[0]
     match = re.match(r"\[([A-Za-z]+)\s*-\s*([^\]|]+)(?:\s*\|[^]]*)?\]\s*(.*)",
-                     rendered.strip(), re.DOTALL)
+                     first_block, re.DOTALL)
     if not match:
         return None
     source_type, name, body = match.group(1).lower(), match.group(2).strip(), match.group(3).strip()

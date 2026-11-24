@@ -123,13 +123,31 @@ def test_confidence_full_match_is_one():
     assert set(matched) == {"reset", "password"}
 
 
-def test_confidence_title_hit_needs_two_matches_for_floor():
-    # Two question words match (one in the title, one in the body) but only
-    # 2 of 4 keywords: the ratio is 0.5, floored to 0.6 by the title hit.
+def test_confidence_two_title_words_floor():
+    # Two question words in the TITLE floor the score to 0.6 even though
+    # only 2 of 6 keywords match: the question names the article's subject
+    # ("reset", "password") and the rest ("mobile", "app", "login", "screen")
+    # is extra detail, not a different topic.
+    score, matched = _confidence(
+        "how do I reset my password on the mobile app login screen",
+        "How to reset your password",
+        "To reset your password, click 'Forgot password' on the sign-in page.")
+    assert score == pytest.approx(0.6)
+    assert set(matched) == {"reset", "password"}
+
+
+def test_confidence_single_title_word_plus_body_word_does_not_floor():
+    # One title word + one body word is NOT a title match: "when is support
+    # open late night" shares only 'support' with the title and 'open' with
+    # the body — 2 of 4 keywords, so the score stays at the raw ratio 0.5
+    # and is NOT floored to 0.6. (The old rule floored on any two matched
+    # words, so one title word plus one incidental body word passed the
+    # gate — e.g. a flight-booking question against the cancel-subscription
+    # article via 'cancel' + 'time'.)
     score, matched = _confidence(
         "when is support open late night", "Support hours",
         "We are open on weekdays.")
-    assert score == pytest.approx(0.6)
+    assert score == pytest.approx(0.5)
     assert set(matched) == {"support", "open"}
 
 
@@ -179,6 +197,43 @@ def test_parse_rendered_rejects_no_results_sentences():
 def test_parse_rendered_rejects_unparseable_text():
     assert _parse_rendered("Just some plain text without a header.") is None
     assert _parse_rendered("[TEXT - Empty article]   ") is None
+
+
+MULTI_BLOCK_RENDERED = "\n\n".join(
+    [PASSWORD_RENDERED, HOURS_RENDERED, CANCEL_RENDERED])
+
+
+def test_parse_rendered_multi_block_returns_first_block_only():
+    """Regression: the renderer joins article blocks with "\\n\\n", and the
+    old (.*) body regex swallowed every block after the first, so a KB
+    answer contained unrelated articles. Only the first block may come back."""
+    parsed = _parse_rendered(MULTI_BLOCK_RENDERED)
+    assert parsed is not None
+    source_type, name, body = parsed
+    assert source_type == "text"
+    assert name == "How to reset your password"
+    assert body.startswith("To reset your password")
+    assert "Support hours" not in body
+    assert "cancel your subscription" not in body
+    assert "[CUSTOM -" not in body
+    assert body.count("[") == 0
+
+
+def test_parse_rendered_multi_block_with_custom_types():
+    """Same cut for non-TEXT source types: the next header is
+    "[CUSTOM - ...]", not part of the first article's body."""
+    rendered = (
+        "[CUSTOM - How to reset your password] To reset your password, click "
+        "'Forgot password' on the sign-in page.\n\n"
+        "[CUSTOM - Support hours] Our support team is available Monday to Friday."
+    )
+    parsed = _parse_rendered(rendered)
+    assert parsed is not None
+    source_type, name, body = parsed
+    assert source_type == "custom"
+    assert name == "How to reset your password"
+    assert "Support hours" not in body
+    assert "[CUSTOM -" not in body
 
 
 # --- find_kb_candidate / find_kb_answer (mocked vector search) --------------
@@ -317,3 +372,75 @@ async def test_kb_hit_for_each_seeded_article(fake_tool):
         hit = await find_kb_answer("agent-1", "org-1", question)
         assert hit is not None, question
         assert hit.source_name == title
+
+
+@pytest.mark.asyncio
+async def test_multi_block_rendering_returns_only_matching_article(fake_tool):
+    """Regression: the tool renders ALL retrieved articles joined by "\\n\\n"
+    (see _PAGE_SEPARATOR); the instant answer must contain only the first
+    (matching) article — no extra "[CUSTOM -" / "[TEXT -" markers, and the
+    citation must be the matching article."""
+    _run_candidate(None, fake_tool, rendered=MULTI_BLOCK_RENDERED)
+    hit = await find_kb_answer("agent-1", "org-1", "How do I reset my password?")
+    assert hit is not None
+    assert hit.source_name == "How to reset your password"
+    assert "Forgot password" in hit.answer
+    assert "Support hours" not in hit.answer
+    assert "cancel your subscription" not in hit.answer
+    assert "[TEXT -" not in hit.answer
+    assert "[CUSTOM -" not in hit.answer
+    assert hit.confidence == pytest.approx(1.0)
+
+    # The same polluted string fed the lean model's near-miss context, so
+    # the ungated candidate must be clean too.
+    _run_candidate(None, fake_tool, rendered=MULTI_BLOCK_RENDERED)
+    candidate = await find_kb_candidate("agent-1", "org-1", "How do I reset my password?")
+    assert candidate is not None
+    assert "Support hours" not in candidate.answer
+    assert "[TEXT -" not in candidate.answer
+
+
+@pytest.mark.asyncio
+async def test_single_title_word_plus_body_word_does_not_pass_gate(fake_tool):
+    """Regression: the old floor fired on any two matched words, so a single
+    title word plus one incidental body word passed the gate. "What time do
+    the flight booking offices cancel?" shares 'cancel' (title) + 'time'
+    (body) with the cancel-subscription article — 2/5 = 0.4 — and must NOT
+    get an instant answer. It stays a near miss (confidence 0.4, 2 matched
+    keywords) the lean model may use as context, nothing more."""
+    _run_candidate(None, fake_tool, rendered=CANCEL_RENDERED)
+    hit = await find_kb_answer("agent-1", "org-1",
+                               "What time do the flight booking offices cancel?")
+    assert hit is None
+
+    _run_candidate(None, fake_tool, rendered=CANCEL_RENDERED)
+    candidate = await find_kb_candidate(
+        "agent-1", "org-1", "What time do the flight booking offices cancel?")
+    assert candidate is not None
+    assert candidate.confidence == pytest.approx(0.4)
+    assert set(candidate.matched_keywords) == {"cancel", "time"}
+
+    # Same hole, more keywords: "At what time can I cancel my flight
+    # booking tomorrow morning?" is 2/6 = 0.33 ('cancel' + 'time') — also
+    # no instant answer.
+    _run_candidate(None, fake_tool, rendered=CANCEL_RENDERED)
+    hit = await find_kb_answer(
+        "agent-1", "org-1",
+        "At what time can I cancel my flight booking tomorrow morning?")
+    assert hit is None
+
+
+@pytest.mark.asyncio
+async def test_two_title_words_still_pass_gate(fake_tool):
+    """Positive case for the floor: the question names the article's subject
+    with TWO title words ("reset", "password") and only 2/6 keywords match
+    overall (0.33), so the 0.6 floor is what carries it over the gate — and
+    it must still get an instant answer."""
+    _run_candidate(None, fake_tool, rendered=PASSWORD_RENDERED)
+    hit = await find_kb_answer(
+        "agent-1", "org-1",
+        "How do I reset my password on the mobile app login screen?")
+    assert hit is not None
+    assert hit.source_name == "How to reset your password"
+    assert hit.confidence == pytest.approx(0.6)
+    assert set(hit.matched_keywords) == {"reset", "password"}
