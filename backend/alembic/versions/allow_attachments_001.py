@@ -1,6 +1,6 @@
 """Enable file attachments on all existing agents
 
-Revision ID: agents_allow_attachments_default_001
+Revision ID: allow_attachments_001
 Revises: mobile_sdk_002
 Create Date: 2026-11-25
 
@@ -20,7 +20,7 @@ from typing import Sequence, Union
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = 'agents_allow_attachments_default_001'
+revision: str = 'allow_attachments_001'
 down_revision: Union[str, None] = 'mobile_sdk_002'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
