@@ -54,6 +54,10 @@ say "Updating ChatterMate in $INSTALL_DIR (branch $BRANCH)"
 # The build regenerates these TRACKED files, so restore exactly them before
 # the dirty check — anything else dirty is a real operator edit.
 git checkout -- frontend/public/config.js backend/assets/widget.js backend/assets/widget.css 2>/dev/null || true
+# The checkout above runs as root and leaves those three generated files
+# root-owned; the frontend build below runs as $APP_USER, so hand them back
+# or the build fails with EACCES writing public/config.js.
+chown "$APP_USER:$APP_USER" "$INSTALL_DIR/frontend/public/config.js" "$INSTALL_DIR/backend/assets/widget.js" "$INSTALL_DIR/backend/assets/widget.css" 2>/dev/null || true
 if [ "$(git status --porcelain | grep -v '^??' | head -1)" ] && [ "$FORCE" -eq 0 ]; then
     die "uncommitted changes in $INSTALL_DIR — commit/stash them, or re-run with --force (their changes will be lost)"
 fi
