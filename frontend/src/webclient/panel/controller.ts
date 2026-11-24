@@ -183,10 +183,14 @@ export interface WidgetComposer {
     previewModal: Shown<boolean>
     previewFile: Shown<PreviewFile | null>
     formatFileSize: (bytes: number) => string
+    formatDuration: (seconds: number | undefined | null) => string
     isImage: (type: string) => boolean
+    isAudio: (type: string) => boolean
     isImageAttachment: (contentType: string) => boolean
+    isAudioAttachment: (contentType: string) => boolean
     getDownloadUrl: (fileUrl: string | null | undefined) => string
     getPreviewUrl: (file: { url: string; file_url?: string }) => string
+    uploadFiles: (files: File[]) => Promise<void>
     handleFileSelect: (event: Event) => Promise<void>
     handleDrop: (event: DragEvent) => Promise<void>
     handleDragOver: (event: DragEvent) => void

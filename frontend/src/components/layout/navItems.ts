@@ -99,6 +99,7 @@ export function useNavItems() {
           link('/settings/integrations', 'integrations', canAccessPath('/settings/integrations')),
           link('/settings/app-integrations', 'integrations', hasEnterpriseModule && canAccessPath('/settings/app-integrations')),
           link('/settings/widget-apps', 'widgets', canAccessPath('/settings/widget-apps')),
+          link('/settings/api-docs', 'api', canAccessPath('/settings/api-docs')),
           link('/settings/ai-config', 'aiconfig', canAccessPath('/settings/ai-config')),
           link('/settings/user', 'usersettings', true, 'account'),
           link('/settings/access-tokens', 'key', hasEnterpriseModule, 'account'),

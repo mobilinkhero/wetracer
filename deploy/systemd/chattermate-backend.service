@@ -1,0 +1,28 @@
+# ChatterMate backend API — installed by install.sh into
+# /etc/systemd/system/chattermate-backend.service.
+# __INSTALL_DIR__ and __APP_USER__ are replaced at install time.
+# The frontend is static files served directly by nginx (no service needed).
+[Unit]
+Description=ChatterMate backend API
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__INSTALL_DIR__/backend
+# Keep local traffic off any proxy: the VM default no_proxy can contain
+# bracketed IPv6 entries ([::1]) that break agno/httpx proxy parsing and
+# make every provider call fail. Plain localhost entries are safe.
+Environment=PYTHONUNBUFFERED=1
+Environment=no_proxy=localhost,127.0.0.1
+Environment=NO_PROXY=localhost,127.0.0.1
+ExecStart=__INSTALL_DIR__/backend/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+# One worker: the widget chat is Socket.IO, which needs sticky sessions
+# across workers. Scale with more machines, not more workers here.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

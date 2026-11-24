@@ -1,0 +1,146 @@
+# ChatterMate nginx site — installed by install.sh into
+# /etc/nginx/sites-available/chattermate.
+# __PUBLIC_HOST__ and __INSTALL_DIR__ are replaced at install time.
+# The frontend (Vue SPA, built into frontend/dist) is served directly.
+# Everything the backend owns is proxied to 127.0.0.1:8000.
+#
+# Routing gotcha this template is built around: Vite puts the SPA's own
+# hashed chunks under dist/assets/, while the backend serves the widget
+# bundle at /assets/widget.js + /assets/widget.css. A plain prefix or
+# extension regex for /assets/ would send one of them to the wrong place,
+# so the two widget files get exact-match locations and everything else
+# under /assets/ falls through to the SPA static files. Likewise the
+# extension regex below must never catch backend URLs: every backend path
+# is a ^~ prefix location, which beats all regex locations in nginx.
+server {
+    listen 80;
+    server_name __PUBLIC_HOST__;
+
+    root __INSTALL_DIR__/frontend/dist;
+    index index.html;
+
+    # Backend accepts up to 25 MB PDFs; the nginx default is 1 MB.
+    client_max_body_size 25m;
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # SPA: fall back to index.html so client-side routes work on refresh.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # PWA control files must never be long-cached.
+    location = /sw.js {
+        add_header Cache-Control "no-cache" always;
+        add_header Service-Worker-Allowed "/" always;
+    }
+    location = /config.js {
+        add_header Cache-Control "no-cache" always;
+    }
+
+    # SPA static chunks (dist/assets/*). The regex below only ever fires for
+    # paths no ^~ backend location claimed — backend URLs under /api/ etc.
+    # are matched first, so /api/v1/uploads/*.png is never served from dist.
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|webp)$ {
+        expires 30d;
+        add_header Cache-Control "public, no-transform";
+    }
+
+    # Widget bundle: the ONLY files the backend serves under /assets/.
+    # Exact match beats the extension regex above; all other /assets/*
+    # requests are the SPA's own chunks and fall through to dist.
+    location = /assets/widget.js {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location = /assets/widget.css {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Backend: REST API. Login/signup answer with three Set-Cookie headers
+    # that together exceed nginx's default header buffer, so raise it.
+    # ^~ beats the extension regex: /api/v1/uploads/*.png must reach the
+    # backend, which mounts public uploads at /api/v1/uploads/{folder}.
+    location ^~ /api/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffer_size 16k;
+        proxy_buffers 8 16k;
+        proxy_busy_buffers_size 32k;
+    }
+
+    # Backend: Socket.IO live chat needs the websocket upgrade headers.
+    location ^~ /socket.io/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Backend: public help center pages (/help/{slug}, path mode) and the
+    # health endpoints (/health, /health/help-center-domain).
+    location ^~ /help/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location ^~ /health {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Backend: API docs. Without this nginx would answer the SPA's
+    # index.html with a 200 for /docs and /openapi.json.
+    location ^~ /docs {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location = /openapi.json {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location = /redoc {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

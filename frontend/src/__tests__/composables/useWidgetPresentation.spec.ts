@@ -73,9 +73,9 @@ describe('useWidgetPresentation', () => {
     })
 
     describe('attachments', () => {
-        it('are offered only once a person has taken over', () => {
+        it('are offered while the AI is answering, with no handover needed', () => {
             const view = setup()
-            expect(view.canUploadMore.value).toBe(false)
+            expect(view.canUploadMore.value).toBe(true)
             view.humanAgent.value = { human_agent_name: 'Sam' }
             expect(view.canUploadMore.value).toBe(true)
         })

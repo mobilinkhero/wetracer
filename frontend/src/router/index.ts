@@ -180,6 +180,15 @@ const baseRoutes = [
     },
   },
   {
+    path: '/settings/api-docs',
+    name: 'api-docs',
+    component: () => import('@/views/settings/ApiDocsSettings.vue'),
+    meta: {
+      requiresAuth: true,
+      layout: 'dashboard',
+    },
+  },
+  {
     // The WordPress plugin's one-click connect: pick an agent, back to wp-admin.
     path: '/connect/wordpress',
     name: 'connect-wordpress',

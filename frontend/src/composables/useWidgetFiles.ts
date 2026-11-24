@@ -20,6 +20,17 @@ import { isAbsoluteUrl } from '../utils/avatars'
 
 // Allowed file types configuration (matching backend)
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'])
+const ALLOWED_AUDIO_TYPES = new Set([
+  'audio/webm',
+  'audio/mp4',
+  'audio/m4a',
+  'audio/x-m4a',
+  'audio/ogg',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/mpeg',
+  'audio/mp3',
+])
 const ALLOWED_DOCUMENT_TYPES = new Set([
   'application/pdf',
   'application/msword',
@@ -29,7 +40,7 @@ const ALLOWED_DOCUMENT_TYPES = new Set([
   'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 ])
-const ALLOWED_FILE_TYPES = new Set([...ALLOWED_IMAGE_TYPES, ...ALLOWED_DOCUMENT_TYPES])
+const ALLOWED_FILE_TYPES = new Set([...ALLOWED_IMAGE_TYPES, ...ALLOWED_AUDIO_TYPES, ...ALLOWED_DOCUMENT_TYPES])
 
 // Extension to MIME type mapping
 const EXTENSION_TO_MIME: Record<string, string> = {
@@ -44,7 +55,13 @@ const EXTENSION_TO_MIME: Record<string, string> = {
   '.txt': 'text/plain',
   '.csv': 'text/csv',
   '.xls': 'application/vnd.ms-excel',
-  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.webm': 'audio/webm',
+  '.mp4': 'audio/mp4',
+  '.m4a': 'audio/mp4',
+  '.ogg': 'audio/ogg',
+  '.wav': 'audio/wav',
+  '.mp3': 'audio/mpeg'
 }
 
 // Magic byte signatures for client-side validation
@@ -68,7 +85,13 @@ const MAGIC_BYTES: Record<string, { bytes: number[]; offset: number }[]> = {
 // Validate file magic bytes
 async function validateMagicBytes(file: File): Promise<{ valid: boolean; error?: string }> {
   const mimeType = file.type
-  
+
+  // Audio has no reliable magic-byte signature across containers (webm/mp4/ogg
+  // vary by codec), so it is validated by type/extension only, server-side.
+  if (mimeType.startsWith('audio/')) {
+    return { valid: true }
+  }
+
   // Text files don't have magic bytes
   if (mimeType === 'text/plain' || mimeType === 'text/csv') {
     return { valid: true }
@@ -136,17 +159,25 @@ function validateExtension(filename: string, mimeType: string): { valid: boolean
   }
   
   const expectedMime = EXTENSION_TO_MIME[ext]
-  
+
   // Handle jpg/jpeg equivalence
-  if ((mimeType === 'image/jpeg' || mimeType === 'image/jpg') && 
+  if ((mimeType === 'image/jpeg' || mimeType === 'image/jpg') &&
       (expectedMime === 'image/jpeg' || expectedMime === 'image/jpg')) {
     return { valid: true }
   }
-  
+
+  // Audio containers are reported inconsistently across browsers
+  // (.m4a as audio/mp4, audio/m4a or audio/x-m4a; .wav as audio/wav or
+  // audio/x-wav; .mp3 as audio/mpeg or audio/mp3), so any audio MIME type
+  // matches any audio extension.
+  if (mimeType.startsWith('audio/') && expectedMime.startsWith('audio/')) {
+    return { valid: true }
+  }
+
   if (expectedMime !== mimeType) {
     return { valid: false, error: `File extension ${ext} does not match content type` }
   }
-  
+
   return { valid: true }
 }
 
@@ -164,6 +195,8 @@ export interface UploadedFile {
   size: number
   url: string
   file_url: string
+  /** Playback length in seconds, for staged audio (filled in once the browser reads the metadata). */
+  duration?: number
 }
 
 /** The file shown in the preview modal. */
@@ -195,6 +228,32 @@ export function useWidgetFiles(token: Ref<string | null>) {
   // Check if file is an image
   const isImageAttachment = (contentType: string): boolean => {
     return contentType.startsWith('image/')
+  }
+
+  // Check if file is audio (voice note or audio file)
+  const isAudioAttachment = (contentType: string): boolean => {
+    return contentType.startsWith('audio/')
+  }
+
+  // Format a playback length in seconds as m:ss
+  const formatDuration = (seconds: number | undefined | null): string => {
+    if (seconds === undefined || seconds === null || !Number.isFinite(seconds)) return ''
+    const total = Math.max(0, Math.round(seconds))
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+  }
+
+  // Fill in a staged audio file's duration once the browser reads its metadata.
+  // No-ops when the browser cannot decode the container (e.g. webm on Safari).
+  const fillAudioDuration = (staged: UploadedFile) => {
+    const preview = staged.file_url || staged.url
+    if (!preview) return
+    const audio = new Audio()
+    audio.preload = 'metadata'
+    audio.onloadedmetadata = () => {
+      if (Number.isFinite(audio.duration)) staged.duration = audio.duration
+    }
+    audio.onerror = () => { /* leave duration unset; the chip still shows the size */ }
+    audio.src = preview
   }
 
   // Generate download URL for attachments
@@ -336,8 +395,16 @@ export function useWidgetFiles(token: Ref<string | null>) {
   const uploadFiles = async (files: File[]) => {
     const MAX_FILES = 3 // Maximum 3 files per message
     const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB for images
-    const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024 // 10MB for documents
+    const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024 // 10MB for documents and audio
     const TARGET_SIZE_KB = 500 // Target 500KB after compression
+
+    // Read a file as base64 (without the data-URL prefix).
+    const readAsBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(((reader.result as string) || '').split(',')[1] || '')
+      reader.onerror = () => reject(new Error('Failed to read file'))
+      reader.readAsDataURL(file)
+    })
     
     // Check if adding these files would exceed the limit
     if (uploadedAttachments.value.length >= MAX_FILES) {
@@ -363,13 +430,15 @@ export function useWidgetFiles(token: Ref<string | null>) {
         }
         
         const isImage = file.type.startsWith('image/')
+        const isAudio = file.type.startsWith('audio/')
         const maxSize = isImage ? MAX_FILE_SIZE : MAX_DOCUMENT_SIZE
-        
+        const sizeLabel = isImage ? 'images' : isAudio ? 'audio' : 'documents'
+
         // Validate file size before upload
         if (file.size > maxSize) {
           const maxSizeMB = maxSize / (1024 * 1024)
           console.error(`File ${file.name} is too large. Maximum size is ${maxSizeMB}MB`)
-          alert(`File "${file.name}" is too large. Maximum size for ${isImage ? 'images' : 'documents'} is ${maxSizeMB}MB`)
+          alert(`File "${file.name}" is too large. Maximum size for ${sizeLabel} is ${maxSizeMB}MB`)
           continue
         }
         
@@ -392,39 +461,42 @@ export function useWidgetFiles(token: Ref<string | null>) {
           } catch (error) {
             console.error('Image compression failed, uploading original:', error)
             // Fallback to original file if compression fails
-            const reader = new FileReader()
-            reader.onload = (e) => {
-              const base64Content = e.target?.result as string
-              const base64Data = base64Content.split(',')[1]
-              
-              uploadedAttachments.value.push({
-                content: base64Data,
-                filename: file.name,
-                type: file.type,
-                size: file.size,
-                url: URL.createObjectURL(file),
-                file_url: URL.createObjectURL(file)
-              })
-            }
-            reader.readAsDataURL(file)
-          }
-        } else {
-          // For non-images, read as-is
-          const reader = new FileReader()
-          reader.onload = (e) => {
-            const base64Content = e.target?.result as string
-            const base64Data = base64Content.split(',')[1]
-            
+            const base64Data = await readAsBase64(file)
             uploadedAttachments.value.push({
               content: base64Data,
               filename: file.name,
-              type: file.type || 'application/octet-stream',
+              type: file.type,
               size: file.size,
-              url: '',
-              file_url: ''
+              url: URL.createObjectURL(file),
+              file_url: URL.createObjectURL(file)
             })
           }
-          reader.readAsDataURL(file)
+        } else if (isAudio) {
+          // Audio is never compressed (canvas compression is image-only) and has
+          // no magic-byte check; read as-is and keep a blob URL so the staged
+          // voice note / audio file can be played back before sending.
+          const base64Data = await readAsBase64(file)
+          const staged: UploadedFile = {
+            content: base64Data,
+            filename: file.name,
+            type: file.type || 'application/octet-stream',
+            size: file.size,
+            url: URL.createObjectURL(file),
+            file_url: URL.createObjectURL(file)
+          }
+          uploadedAttachments.value.push(staged)
+          fillAudioDuration(staged)
+        } else {
+          // For non-images, read as-is
+          const base64Data = await readAsBase64(file)
+          uploadedAttachments.value.push({
+            content: base64Data,
+            filename: file.name,
+            type: file.type || 'application/octet-stream',
+            size: file.size,
+            url: '',
+            file_url: ''
+          })
         }
       } catch (error) {
         console.error('File upload error:', error)
@@ -507,12 +579,19 @@ export function useWidgetFiles(token: Ref<string | null>) {
     return type.startsWith('image/')
   }
 
+  // Check if file type is audio (utility function)
+  const isAudio = (type: string): boolean => {
+    return type.startsWith('audio/')
+  }
+
   return {
     uploadedAttachments,
     previewModal,
     previewFile,
     formatFileSize,
+    formatDuration,
     isImageAttachment,
+    isAudioAttachment,
     getDownloadUrl,
     getPreviewUrl,
     handleFileSelect,
@@ -524,6 +603,7 @@ export function useWidgetFiles(token: Ref<string | null>) {
     removeAttachment,
     openPreview,
     closePreview,
-    isImage
+    isImage,
+    isAudio
   }
 }

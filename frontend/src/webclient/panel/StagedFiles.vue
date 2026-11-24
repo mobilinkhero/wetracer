@@ -29,7 +29,7 @@ const { uploadedAttachments } = ctrl
     <ul v-if="uploadedAttachments.length" class="cm-staged" :aria-label="PANEL_COPY.stagedFiles">
         <!-- Keyed by place: two pasted screenshots are both "image.png", and a file is
              removed by its place (removeAttachment(index)). -->
-        <li v-for="(file, index) in uploadedAttachments" :key="index" class="cm-staged__file">
+        <li v-for="(file, index) in uploadedAttachments" :key="index" class="cm-staged__file" :class="{ 'cm-staged__file--audio': ctrl.isAudio(file.type) }">
             <button
                 v-if="ctrl.isImage(file.type)"
                 type="button"
@@ -39,12 +39,15 @@ const { uploadedAttachments } = ctrl
             >
                 <img :src="ctrl.getPreviewUrl(file)" alt="">
             </button>
+            <span v-else-if="ctrl.isAudio(file.type)" class="cm-staged__thumb" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"></path><path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"></path></svg>
+            </span>
             <span v-else class="cm-staged__thumb" aria-hidden="true">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"></path><path d="M13 2v7h7"></path></svg>
             </span>
             <span class="cm-staged__info">
                 <span class="cm-staged__name">{{ file.filename }}</span>
-                <span class="cm-staged__size">{{ ctrl.formatFileSize(file.size) }}</span>
+                <span class="cm-staged__size">{{ [ctrl.formatDuration(file.duration), ctrl.formatFileSize(file.size)].filter(Boolean).join(' · ') }}</span>
             </span>
             <button
                 type="button"
@@ -54,6 +57,14 @@ const { uploadedAttachments } = ctrl
             >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
             </button>
+            <audio
+                v-if="ctrl.isAudio(file.type)"
+                controls
+                preload="metadata"
+                class="cm-staged__audio"
+                :src="ctrl.getPreviewUrl(file)"
+                :aria-label="PANEL_COPY.voiceNote"
+            ></audio>
         </li>
     </ul>
 </template>
@@ -65,4 +76,7 @@ const { uploadedAttachments } = ctrl
 .cm-staged__thumb img { width: 100%; height: 100%; object-fit: cover; }
 .cm-staged__info { display: flex; flex-direction: column; min-width: 0; }
 .cm-staged__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+/* Audio chips wrap: the player sits full-width under the name/size/remove row. */
+.cm-staged__file--audio { flex-wrap: wrap; }
+.cm-staged__audio { width: 100%; height: 32px; min-width: 0; }
 </style>

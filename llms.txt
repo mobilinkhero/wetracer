@@ -47,3 +47,13 @@ chattermate widget create --agent-id <agent-id> --name "Website widget"
 
 - [Self-host with Docker](https://docs.chattermate.chat/quickstart#option-b-self-host-with-docker): run the full stack on your own infrastructure with the self-host CLI (`npm install -g chattermate-deploy`, command `chattermate-deploy init/start/stop`).
 - [Docker deployment](https://docs.chattermate.chat/deployment/docker)
+
+## Mobile Chat API (raw REST)
+
+- [Chat API — AI Integration Guide](docs/AI-INTEGRATION.md): the public
+  Chat API (`/api/v1/mobile`) — auth (public widget id + short-lived visitor JWT),
+  endpoints, live Socket.IO replies, push, rate limits, security rules, and
+  copy-paste code for the raw REST API, usable from any stack with no SDK.
+  In the dashboard: Settings → API Docs.
+- OpenAPI 3 spec: `frontend/src/assets/openapi.yaml` in the repo; compact
+  integration doc: `frontend/src/assets/ai-integration-compact.md`.

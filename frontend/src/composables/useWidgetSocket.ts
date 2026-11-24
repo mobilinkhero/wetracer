@@ -35,6 +35,93 @@ export interface SessionState {
     created: boolean
 }
 
+/**
+ * One token (or chunk) of a live AI reply, and the end / failure of a
+ * streamed reply. The wire shape — event names and payload keys — is
+ * defined by `docs/STREAMING-PROTOCOL.md` in the repo root; until that
+ * protocol lands, nothing subscribes to any streaming event (see
+ * [bindStreamingEvents]). The parsers below are deliberately tolerant
+ * (delta/token/chunk, full_text/text) so a protocol-conformant payload
+ * is accepted whichever of those keys it uses.
+ */
+export interface WidgetStreamToken {
+    /** Stored row id of the reply being streamed, when the server sent one. */
+    messageId?: number
+    /** The new text in this event (empty when it carries only [fullText]). */
+    delta: string
+    /** Running total text, when the server sends it instead of (or as well as) deltas. */
+    fullText?: string
+    agentName?: string
+    /** `model-stream`, `kb` or `model-full`. */
+    source?: string
+}
+
+export interface WidgetStreamDone {
+    messageId?: number
+    /** The complete reply text, when the server sends it. */
+    fullText?: string
+    /** The complete reply as a message, when the server sends it. */
+    message?: { message?: string; message_id?: number; sources?: string[]; agent_name?: string }
+}
+
+/** The streaming event names from `docs/STREAMING-PROTOCOL.md` (v1). */
+export interface WidgetStreamingEvents {
+    startEvent: string
+    tokenEvent: string
+    doneEvent: string
+    errorEvent: string
+}
+
+/** The documented widget streaming events (docs/STREAMING-PROTOCOL.md v1). */
+export const WIDGET_STREAMING_EVENTS: WidgetStreamingEvents = {
+    startEvent: 'chat_response_stream_start',
+    tokenEvent: 'chat_response_stream_token',
+    doneEvent: 'chat_response_stream_done',
+    errorEvent: 'chat_response_stream_error',
+}
+
+export interface WidgetStreamStart {
+    messageId?: number
+    /** `model-stream`, `kb` or `model-full`. */
+    source?: string
+}
+
+const _streamIdOf = (data: any): number | undefined => {
+    const raw = data?.message_id ?? data?.messageId ?? data?.id
+    return typeof raw === 'number' ? raw : undefined
+}
+
+const parseStreamToken = (data: any): WidgetStreamToken | null => {
+    if (!data || typeof data !== 'object') return null
+    const delta = data.delta ?? data.token ?? data.chunk
+    const full = data.full_text ?? data.fullText
+    return {
+        messageId: _streamIdOf(data),
+        delta: typeof delta === 'string' ? delta : '',
+        fullText: typeof full === 'string' ? full : undefined,
+        agentName: typeof data.agent_name === 'string' ? data.agent_name : undefined,
+        source: typeof data.source === 'string' ? data.source : undefined,
+    }
+}
+
+const parseStreamDone = (data: any): WidgetStreamDone | null => {
+    if (!data || typeof data !== 'object') return null
+    const full = data.full_text ?? data.fullText ?? data.text
+    const rawMessage = (data as any).message
+    return {
+        messageId: _streamIdOf(data),
+        fullText: typeof full === 'string' ? full : undefined,
+        message: rawMessage && typeof rawMessage === 'object'
+            ? {
+                message: typeof rawMessage.message === 'string' ? rawMessage.message : undefined,
+                message_id: _streamIdOf(rawMessage),
+                sources: Array.isArray(rawMessage.sources) ? rawMessage.sources : undefined,
+                agent_name: typeof rawMessage.agent_name === 'string' ? rawMessage.agent_name : undefined,
+            }
+            : undefined,
+    }
+}
+
 // How long to wait for the server to confirm a chat was closed. Generous enough for
 // a slow round trip, short enough that the visitor is not left staring at a button.
 const END_CHAT_TIMEOUT_MS = 5000
@@ -89,6 +176,150 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
         loading.value = true
         if (botTypingTimeout) clearTimeout(botTypingTimeout)
         botTypingTimeout = setTimeout(stopBotTyping, BOT_TYPING_TIMEOUT_MS)
+    }
+
+    // --- Token-by-token streaming (docs/STREAMING-PROTOCOL.md v1) ---
+    // The visitor's own message needs no equivalent: sendMessage is a
+    // fire-and-forget socket emit — the message is shown the moment it
+    // is sent and the (slow) AI reply never blocks it, so the web
+    // widget never had the mobile "Send timed out" bug. What it gets
+    // here is the live-reply side: tokens render in the reply bubble
+    // as they arrive, the typing indicator runs only until the first
+    // token, and a complete `chat_response` finalises the bubble.
+    // The documented events are bound by default (see
+    // WIDGET_STREAMING_EVENTS); bindStreamingEvents re-binds them.
+    let streamingMessage: any = null
+    let lastStreamSource: string | undefined = undefined
+    let boundStreamingEvents: WidgetStreamingEvents | null =
+        WIDGET_STREAMING_EVENTS
+    const isLiveStreaming = ref(false)
+
+    /** The stream started: open the in-progress bubble now — the first token may be seconds away. */
+    const applyStreamStart = (event: WidgetStreamStart) => {
+        if (streamingMessage) return
+        stopBotTyping()
+        streamingMessage = {
+            ...(typeof event.messageId === 'number' ? { id: event.messageId } : {}),
+            message: '',
+            message_type: 'bot',
+            created_at: new Date().toISOString(),
+            session_id: '',
+            source: event.source,
+            liveStream: true,
+        }
+        messages.value.push(streamingMessage)
+        isLiveStreaming.value = true
+    }
+
+    /** One token of a live reply. First token replaces the typing dots with the streaming bubble. */
+    const applyStreamToken = (event: WidgetStreamToken) => {
+        stopBotTyping()
+        if (!streamingMessage) {
+            streamingMessage = {
+                ...(typeof event.messageId === 'number' ? { id: event.messageId } : {}),
+                message: event.fullText ?? event.delta,
+                message_type: 'bot',
+                created_at: new Date().toISOString(),
+                session_id: '',
+                agent_name: event.agentName,
+                source: event.source,
+                // Not `stream`: that flag is the client-side typewriter,
+                // which reveals a complete message. A live stream renders
+                // its growing text directly (see AnswerMessage/HumanMessage).
+                liveStream: true,
+            }
+            messages.value.push(streamingMessage)
+            isLiveStreaming.value = true
+        } else {
+            streamingMessage.message =
+                event.fullText ?? `${streamingMessage.message ?? ''}${event.delta}`
+            if (typeof event.messageId === 'number') streamingMessage.id = event.messageId
+            if (event.source) streamingMessage.source = event.source
+        }
+    }
+
+    /**
+     * The streamed reply finished. The widget `done` event carries only
+     * `{session_id, source, message_id}` — the final `chat_response`
+     * follows immediately, so the bubble stays live (with its id)
+     * until that reply replaces it, instead of finalising into a
+     * second bubble. A done that carries the complete text/message
+     * (other transports) finalises the bubble in place.
+     */
+    const completeStream = (event: WidgetStreamDone) => {
+        const message = streamingMessage
+        if (!message) return
+        if (event.message?.message !== undefined || event.fullText !== undefined) {
+            streamingMessage = null
+            isLiveStreaming.value = false
+            stopBotTyping()
+            message.liveStream = false
+            if (event.message?.message !== undefined) message.message = event.message.message
+            else if (event.fullText !== undefined) message.message = event.fullText
+            if (typeof event.messageId === 'number') message.id = event.messageId
+            if (event.message?.sources) message.sources = event.message.sources
+            if (event.message?.agent_name) message.agent_name = event.message.agent_name
+            return
+        }
+        if (typeof event.messageId === 'number') message.id = event.messageId
+        // Otherwise: wait for the chat_response that follows.
+    }
+
+    /**
+     * The stream failed mid-reply. The partial text stays visible (it
+     * is real reply content); the typing dots come back while the
+     * complete reply is awaited through the normal `chat_response`
+     * path, instead of an error banner for a reply that may still
+     * arrive in full.
+     */
+    const failStream = (_error: string) => {
+        const message = streamingMessage
+        streamingMessage = null
+        isLiveStreaming.value = false
+        if (message) message.liveStream = false
+        startBotTyping()
+    }
+
+    /** Drop the streaming placeholder: a complete reply supersedes it. */
+    const dropStreamingPlaceholder = () => {
+        if (!streamingMessage) return
+        // The final chat_response carries no source; the stream that
+        // produced it does, so the reply keeps its "from help article"
+        // label after finalisation.
+        lastStreamSource = streamingMessage.source
+        messages.value = messages.value.filter((m: any) => m !== streamingMessage)
+        streamingMessage = null
+        isLiveStreaming.value = false
+    }
+
+    /** Subscribe to the streaming events named by docs/STREAMING-PROTOCOL.md — call only with the documented names. */
+    const bindStreamingEvents = (events: WidgetStreamingEvents) => {
+        boundStreamingEvents = events
+        if (socket) registerStreamingListeners(socket)
+    }
+
+    const registerStreamingListeners = (sock: Socket) => {
+        if (!boundStreamingEvents) return
+        const { startEvent, tokenEvent, doneEvent, errorEvent } = boundStreamingEvents
+        sock.on(startEvent, (data: any) => {
+            if (!data || typeof data !== 'object') return
+            applyStreamStart({
+                messageId: _streamIdOf(data),
+                source: typeof data.source === 'string' ? data.source : undefined,
+            })
+        })
+        sock.on(tokenEvent, (data: any) => {
+            const token = parseStreamToken(data)
+            if (token) applyStreamToken(token)
+        })
+        sock.on(doneEvent, (data: any) => {
+            const done = parseStreamDone(data)
+            if (done) completeStream(done)
+        })
+        sock.on(errorEvent, (data: any) => {
+            const message = data?.error ?? data?.message
+            failStream(typeof message === 'string' ? message : 'Streaming failed')
+        })
     }
 
     let socket: Socket | null = null
@@ -289,7 +520,10 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
 
         socket.on('chat_response', (data) => {
             stopBotTyping() // the reply we were waiting for has arrived
-            
+            // A complete reply supersedes a streaming bubble (same
+            // reply, delivered whole): drop the placeholder first, or
+            // the reply would show twice.
+            dropStreamingPlaceholder()
             // Capture session_id from response for file attachments
             if (data.session_id) {
                 console.log('Captured session_id from chat_response:', data.session_id)
@@ -359,6 +593,9 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
                     session_id: '',
                     agent_name: data.agent_name,
                     stream: true, // live reply → client-side typewriter reveal
+                    // A streamed reply's source (e.g. `kb`) survives
+                    // finalisation so the "from help article" label stays.
+                    ...(lastStreamSource ? { source: lastStreamSource } : {}),
                     // Knowledge-base citations (display gated by show_citations in the widget)
                     sources: Array.isArray(data.sources) && data.sources.length ? data.sources : undefined,
                     attributes: {
@@ -372,6 +609,9 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
                 })
             }
             // loading.value = false // Moved to the top
+            // Consumed by the branch above (if any): a later,
+            // non-streamed reply must not inherit this turn's source.
+            lastStreamSource = undefined
         })
 
         socket.on('handle_taken_over', (data: { session_id: string, user_name: string, profile_picture?: string }) => {
@@ -434,6 +674,7 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
         socket.on('form_submitted', handleFormSubmitted)
         socket.on('workflow_state', handleWorkflowState)
         socket.on('workflow_proceeded', handleWorkflowProceeded)
+        registerStreamingListeners(socket)
 
         return socket
     }
@@ -744,9 +985,9 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
         // Add temporary attachments for immediate display (will be replaced with real URLs from backend)
         if (files.length > 0) {
             userMessage.attachments = files.map((file, idx) => {
-                // Create temporary blob URL for images
+                // Create temporary blob URL for images and audio
                 let tempUrl = ''
-                if (file.content_type.startsWith('image/')) {
+                if (file.content_type.startsWith('image/') || file.content_type.startsWith('audio/')) {
                     // Convert base64 to blob URL for immediate display
                     const byteCharacters = atob(file.content)
                     const byteNumbers = new Array(byteCharacters.length)
@@ -911,7 +1152,15 @@ export function useWidgetSocket({ panel = false }: { panel?: boolean } = {}) {
         setToken,
         setWidgetId,
         on,
-        emit
+        emit,
+        // Token-by-token streaming (docs/STREAMING-PROTOCOL.md): wire
+        // with bindStreamingEvents once the protocol names the events.
+        isLiveStreaming,
+        applyStreamStart,
+        applyStreamToken,
+        completeStream,
+        failStream,
+        bindStreamingEvents,
     }
 }
 

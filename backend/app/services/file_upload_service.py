@@ -31,7 +31,12 @@ ALLOWED_DOCUMENT_TYPES = {'application/pdf', 'application/msword',
                           'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                           'text/plain', 'text/csv', 'application/vnd.ms-excel',
                           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}
-ALLOWED_FILE_TYPES = ALLOWED_IMAGE_TYPES | ALLOWED_DOCUMENT_TYPES
+# Voice notes: browsers record webm/opus (MediaRecorder); also accept the
+# common containers a visitor's device may send. No reliable magic bytes for
+# these, so validate_magic_bytes skips them (see MAGIC_BYTES below).
+ALLOWED_AUDIO_TYPES = {'audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/x-m4a',
+                       'audio/ogg', 'audio/wav', 'audio/x-wav'}
+ALLOWED_FILE_TYPES = ALLOWED_IMAGE_TYPES | ALLOWED_DOCUMENT_TYPES | ALLOWED_AUDIO_TYPES
 
 # Security: SVG removed from default allowed types due to XSS risks
 # Can be enabled per-agent if needed with proper sanitization
@@ -87,6 +92,16 @@ MAGIC_BYTES = {
     ],
     'text/plain': [],  # Text files don't have magic bytes, validated by content
     'text/csv': [],  # CSV files don't have magic bytes, validated by content
+    # Audio: no reliable magic bytes across containers/codecs (webm/opus,
+    # mp4/m4a, ogg, wav, mp3 all vary), so no signature check — the empty
+    # list makes validate_magic_bytes skip them, like text files.
+    'audio/webm': [],
+    'audio/mp4': [],
+    'audio/mpeg': [],
+    'audio/x-m4a': [],
+    'audio/ogg': [],
+    'audio/wav': [],
+    'audio/x-wav': [],
 }
 
 # File extension to MIME type mapping for validation
@@ -103,6 +118,12 @@ EXTENSION_TO_MIME = {
     '.csv': 'text/csv',
     '.xls': 'application/vnd.ms-excel',
     '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.webm': 'audio/webm',
+    '.mp4': 'audio/mp4',
+    '.m4a': 'audio/x-m4a',
+    '.ogg': 'audio/ogg',
+    '.wav': 'audio/wav',
+    '.mp3': 'audio/mpeg',
 }
 
 # Category labels for display
@@ -112,6 +133,7 @@ FILE_TYPE_CATEGORIES = {
     'office': {'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},
     'text': {'text/plain', 'text/csv'},
+    'audio': set(ALLOWED_AUDIO_TYPES),
 }
 
 

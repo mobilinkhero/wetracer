@@ -1690,7 +1690,7 @@ import {
       footerText.target = '_blank';
       footerText.rel = 'noopener noreferrer';
       footerText.className = 'chattermate-error-footer-link';
-      footerText.textContent = 'Powered by ChatterMate';
+      footerText.textContent = 'Powered by WeTracer';
       footer.appendChild(logoSvg);
       footer.appendChild(footerText);
 

@@ -138,10 +138,10 @@ describe('the panel shell', () => {
         expect(wrapper!.attributes('style')).toContain('border-radius: 0')
     })
 
-    it('links "Powered by ChatterMate" unless the plan hides it', async () => {
+    it('links "Powered by WeTracer" unless the plan hides it', async () => {
         panel()
         const link = wrapper!.get('.cm-footer a')
-        expect(link.text().replace(/\s+/g, ' ')).toBe('Powered by ChatterMate')
+        expect(link.text().replace(/\s+/g, ' ')).toBe('Powered by WeTracer')
         ctrl.showBranding.value = false
         ctrl.showAiDisclaimer.value = false
         await nextTick()
@@ -229,9 +229,9 @@ describe('the panel\'s screens and notices', () => {
         ['a landing page', { showLandingPage: ref(true), landingPageData: ref({ heading: 'Welcome' }) }],
         ['a full-screen form', { showFullScreenForm: ref(true), fullScreenFormData: ref({ title: 'Your details', fields: [] }) }],
         ['the unavailable notice', { showAuthError: ref(true), isApiKeyAuthRequired: ref(true) }],
-    ] as Array<[string, Partial<FakeController>]>)('keeps "Powered by ChatterMate" under %s, without the AI disclosure', (_name, state) => {
+    ] as Array<[string, Partial<FakeController>]>)('keeps "Powered by WeTracer" under %s, without the AI disclosure', (_name, state) => {
         panel(state)
-        expect(wrapper!.get('.cm-footer a').text().replace(/\s+/g, ' ')).toBe('Powered by ChatterMate')
+        expect(wrapper!.get('.cm-footer a').text().replace(/\s+/g, ' ')).toBe('Powered by WeTracer')
         expect(wrapper!.text()).not.toContain('AI can make mistakes')
     })
 

@@ -32,10 +32,16 @@ const { humanAgentPhotoUrl } = ctrl
 
 const name = computed(() =>
     props.message.agent_name || ctrl.humanAgent.value.human_agent_name || ctrl.agentName.value)
-const streaming = computed(() => ctrl.isStreaming(props.index))
+const liveStreaming = computed(() => !!props.message.liveStream)
+const streaming = computed(() => ctrl.isStreaming(props.index) || liveStreaming.value)
 const html = computed(() => {
     const full = props.message.message || ''
-    return renderMarkdown(streaming.value ? ctrl.displayText(props.index, full) : full)
+    const shown = liveStreaming.value
+        ? `${full} ▍`
+        : streaming.value
+            ? ctrl.displayText(props.index, full)
+            : full
+    return renderMarkdown(shown)
 })
 const files = computed(() => props.message.attachments ?? [])
 const edited = computed(() => !!props.message.attributes?.edited_at)

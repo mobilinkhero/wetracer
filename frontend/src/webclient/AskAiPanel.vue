@@ -330,7 +330,7 @@ onBeforeUnmount(() => {
 
         <div v-if="disclaimer || showBranding" class="askai__foot">
             <span v-if="disclaimer">{{ disclaimer }}</span>
-            <a v-if="showBranding" class="askai__brand" href="https://chattermate.chat" target="_blank" rel="noopener noreferrer">Powered by ChatterMate</a>
+            <a v-if="showBranding" class="askai__brand" href="https://chattermate.chat" target="_blank" rel="noopener noreferrer">Powered by WeTracer</a>
         </div>
     </div>
 </template>

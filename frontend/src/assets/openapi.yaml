@@ -1,0 +1,1159 @@
+# ChatterMate public Chat API — OpenAPI 3.0.3
+#
+# The API the Flutter SDK (`flutter_sdk/`, package `chattermate_chat`) and any
+# raw-HTTP client use to chat with a ChatterMate widget without a WebView.
+#
+# Source of truth: the implementation in `backend/app/api/mobile_chat.py`
+# (`/api/v1/mobile`, visitor endpoints) and `backend/app/api/mobile_admin.py`
+# (`/api/v1/admin/mobile`, dashboard-admin endpoints), verified 2026-11-23
+# against the live backend and the backend test suite
+# (`backend/tests/api/test_mobile_chat.py`: 21 passed,
+# `backend/tests/api/test_mobile_admin.py`: 5 passed).
+#
+# Companion doc (human + LLM readable, both integration paths with copy-paste
+# code): `docs/AI-INTEGRATION.md` in the repo. Compact llms.txt variant:
+# `flutter-sdk/llms.txt` next to this file.
+#
+# Corrections to the earlier contract (`flutter-sdk/API_CONTRACT.md` v1) that
+# this spec encodes — the code wins where they disagree:
+# - The visitor JWT lives 1 hour (`expires_in: 3600`), not 30 days.
+# - `POST /conversations/{id}/rotate` exists (not in the contract): it revokes
+#   the old token and mints a fresh one for the same conversation.
+# - FCM config lives at `/api/v1/admin/mobile/fcm-config` (dashboard auth),
+#   NOT at `/api/v1/mobile/fcm-config` as the contract said.
+# - `POST /conversations` accepts an optional `device_id`; when one is sent,
+#   the token is bound to it and later calls must send the same id in the
+#   `X-Device-Id` header or get 401.
+# - The live allowed-upload list is the one in the 422 error below
+#   (includes .mp3/.jpg, which the contract omitted).
+openapi: 3.0.3
+info:
+  title: ChatterMate public Chat API
+  version: "1.0.0"
+  description: |
+    Chat with a ChatterMate AI agent from a mobile app (or any HTTP client)
+    without a WebView. The client is a **widget visitor**, not a dashboard
+    user: it authenticates with a short-lived signed visitor JWT minted by
+    `POST /api/v1/mobile/conversations` and sent as `X-Conversation-Token`.
+
+    The widget id is **public** — it is the id of the chat widget on the
+    website, shown in the dashboard under Settings → API Docs. Secret API
+    keys are server-side only and must never ship in an app binary.
+
+    Live replies arrive over Socket.IO, namespace `/widget`, authenticated
+    with the same conversation token (`auth: {"conversation_token": ...}`).
+    The socket is **receive-only** for mobile: chat is always sent over
+    REST `POST .../messages`. See `SocketIO` in `components` and
+    `docs/AI-INTEGRATION.md` for the event list.
+
+    Base URL (dev): `http://localhost:8000`. Production is the same origin
+    that serves the dashboard API. All timestamps are ISO-8601 UTC.
+  contact:
+    name: ChatterMate
+    url: https://github.com/chattermate/chattermate.chat
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+servers:
+  - url: http://localhost:8000
+    description: Local development stack
+  - url: https://app.chattermate.chat
+    description: Hosted ChatterMate
+tags:
+  - name: mobile
+    description: Public visitor endpoints (conversation token only).
+  - name: mobile-admin
+    description: >
+      Org-admin endpoints (dashboard auth only). Never called from an app.
+  - name: realtime
+    description: Socket.IO live replies on namespace `/widget` (not REST).
+security:
+  - ConversationToken: []
+paths:
+  /api/v1/mobile/conversations:
+    post:
+      tags: [mobile]
+      operationId: startConversation
+      summary: Start or resume a conversation
+      description: |
+        Mints the visitor JWT for a widget. Pass `conversation_token` with a
+        stored token to resume: if it names a live (open/transferred)
+        conversation for this widget, that conversation is returned with the
+        **same** token and `created: false`; otherwise a new conversation is
+        started. The token lasts 1 hour (`expires_in: 3600`) and is tied to
+        the widget + customer + conversation (+ device, when `device_id` is
+        sent). Store `conversation_id` + `conversation_token` on device;
+        they survive app restarts.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartConversationRequest'
+            examples:
+              new:
+                summary: New conversation
+                value:
+                  widget_id: 72e0025a-d062-40a2-a1d5-6598e84bf4a2
+                  visitor_name: Ahtisham
+                  visitor_email: visitor@example.com
+              resume:
+                summary: Resume with a stored token
+                value:
+                  widget_id: 72e0025a-d062-40a2-a1d5-6598e84bf4a2
+                  conversation_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…
+      responses:
+        '200':
+          description: Conversation started or resumed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+              example:
+                conversation_id: 1bf5844c-e9a3-4fcc-a2c1-dcbebb5a986a
+                conversation_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…
+                customer_id: 95de898a-796f-4775-9491-d212894d955c
+                widget_id: 72e0025a-d062-40a2-a1d5-6598e84bf4a2
+                agent_name: Media Test Support
+                created: true
+                expires_in: 3600
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Unknown widget id, or the agent behind it is missing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: Widget not found
+        '422':
+          description: Bad body, or the widget's organisation has no active AI configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                noAiConfig:
+                  value:
+                    detail: AI configuration required
+                tokenAuthWidget:
+                  value:
+                    detail: This widget requires a site-issued token; mobile start is not available
+  /api/v1/mobile/conversations/{conversation_id}/rotate:
+    post:
+      tags: [mobile]
+      operationId: rotateConversationToken
+      summary: Rotate the visitor JWT
+      description: |
+        Revokes the presented token (its id is deleted from Redis) and mints
+        a fresh 1-hour token for the same conversation + widget + device.
+        Call before the token lapses — the SDK pattern is to rotate when
+        half the lifetime remains. A lapsed token cannot be rotated: start
+        or resume via `POST /conversations` instead. The old token returns
+        401 from the moment this call succeeds.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '200':
+          description: Fresh token for the same conversation.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conversation_token, expires_in, conversation_id]
+                properties:
+                  conversation_token:
+                    type: string
+                    description: The new JWT. Replace the stored token with it.
+                  expires_in:
+                    type: integer
+                    example: 3600
+                  conversation_id:
+                    type: string
+                    format: uuid
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ConversationNotFound'
+  /api/v1/mobile/conversations/{conversation_id}/messages:
+    get:
+      tags: [mobile]
+      operationId: listMessages
+      summary: Read messages (history / polling fallback)
+      description: |
+        Full history when `after` is omitted; only messages with an id
+        greater than `after` when it is given. Poll at most once every
+        3 seconds while a reply is pending, and stop polling once the
+        `/widget` socket reconnects. `sender` is `visitor` (`message_type:
+        "user"`), `ai` (`"bot"`) or `agent` (`"agent"` — a human in the
+        inbox). Attachment `file_url`s are signed and time-limited: fetch
+        them promptly, do not cache them as permanent.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - name: after
+          in: query
+          description: Only messages with an id greater than this one.
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          description: Default 50, max 100.
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Messages for this conversation, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conversation_id, messages]
+                properties:
+                  conversation_id:
+                    type: string
+                    format: uuid
+                  messages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Message'
+              example:
+                conversation_id: 1bf5844c-e9a3-4fcc-a2c1-dcbebb5a986a
+                messages:
+                  - id: 20
+                    sender: visitor
+                    text: Hello, what is my order total?
+                    message_type: user
+                    attachments: []
+                    created_at: '2026-11-23T00:05:00+00:00'
+                    user_name: null
+                    agent_name: Media Test Support
+                  - id: 21
+                    sender: ai
+                    text: Your order ORD-78412 totals $129.99.
+                    message_type: bot
+                    attachments: []
+                    created_at: '2026-11-23T00:05:04+00:00'
+                    user_name: null
+                    agent_name: Media Test Support
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ConversationNotFound'
+    post:
+      tags: [mobile]
+      operationId: sendMessage
+      summary: Send a message (+ files)
+      description: |
+        Runs the same AI turn the web widget runs (same agent, same model,
+        same media understanding): images are seen by the model, PDF / text /
+        DOCX / XLSX text is extracted (capped at 12,000 chars), voice notes
+        are transcribed with Whisper. The response holds the **stored
+        visitor message only** — the AI reply is NOT in it; it arrives over
+        the `/widget` socket (`chat_response`) or via polling `GET
+        .../messages?after=<your message id>`.
+
+        `ai_reply_pending: true` means a reply is being produced or awaited.
+        `false` means a human has already taken over (or the agent is
+        human-only): no AI reply is coming; the reply arrives as a human
+        message instead. Do not retry on timeout — retrying sends the
+        message twice. If the request times out, poll `GET .../messages`
+        to see whether the visitor message was stored.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                  description: The visitor's message. May be empty only when `files` is present.
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: |
+                    0..n attachments (`files[]` also accepted). Images
+                    jpeg/png/gif/webp (≤ 5 MB); documents pdf/doc/docx/txt/
+                    csv/xls/xlsx; audio webm/mp4/mpeg/m4a/ogg/wav/mp3
+                    (≤ 10 MB). A file that fails validation returns 422
+                    and **no** message is stored.
+      responses:
+        '200':
+          description: Visitor message stored; AI reply pending or not.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, ai_reply_pending]
+                properties:
+                  message:
+                    $ref: '#/components/schemas/Message'
+                  ai_reply_pending:
+                    type: boolean
+                    example: true
+                  note:
+                    type: string
+                    description: |
+                      `action_required` when the turn paused on a host action
+                      the app cannot complete — no reply will follow.
+                    example: action_required
+              example:
+                message:
+                  id: 20
+                  sender: visitor
+                  text: Hello, what is my order total?
+                  message_type: user
+                  attachments: []
+                  created_at: '2026-11-23T00:05:00+00:00'
+                  user_name: null
+                  agent_name: Media Test Support
+                ai_reply_pending: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ConversationNotFound'
+        '409':
+          description: The chat is waiting for the app to finish the last host-action step.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: Still waiting for the app to finish the last step.
+        '410':
+          description: Conversation is closed; start a new one. (A closed conversation is reopened first when possible.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: Conversation is closed; start a new one
+        '422':
+          description: Empty message with no files, attachments not allowed for this agent, or a file failed validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                empty:
+                  value:
+                    detail: Message text or files are required
+                badExtension:
+                  value:
+                    detail: "File extension '.exe' is not allowed. Allowed extensions: .csv, .doc, .docx, .gif, .jpeg, .jpg, .m4a, .mp3, .mp4, .ogg, .pdf, .png, .txt, .wav, .webm, .webp, .xls, .xlsx"
+                noAiConfig:
+                  value:
+                    detail: AI configuration required
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/v1/mobile/conversations/{conversation_id}/devices:
+    post:
+      tags: [mobile]
+      operationId: registerDevice
+      summary: Register a device for push
+      description: |
+        Upsert by (`conversation_id`, `push_token`): re-registering the same
+        token refreshes it and never creates a duplicate row. When an AI or
+        human reply is delivered to a conversation that has registered
+        devices **and no live `/widget` socket is connected**, the backend
+        sends one FCM push per registered device; when a socket is
+        connected no push is sent (no duplicates). Push payload:
+        `notification: {title: <agent display name>, body: <first ~120
+        chars of the reply>}`, `data: {conversation_id, message_id,
+        type: "chat_response"}`. On notification tap, resume via
+        `POST /conversations` with the stored token, then `GET .../messages`
+        — never trust the truncated payload body.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [push_token, platform]
+              properties:
+                push_token:
+                  type: string
+                  description: FCM registration token.
+                platform:
+                  type: string
+                  enum: [android, ios]
+            example:
+              push_token: fcm-registration-token
+              platform: android
+      responses:
+        '200':
+          description: Device registered (or refreshed).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, device_id, platform]
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  device_id:
+                    type: string
+                    format: uuid
+                  platform:
+                    type: string
+                    enum: [android, ios]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ConversationNotFound'
+        '422':
+          description: Bad platform or empty token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: platform must be 'android' or 'ios'
+  /api/v1/mobile/push-attempts:
+    get:
+      tags: [mobile]
+      operationId: listPushAttempts
+      summary: Push attempts (debug / test mode)
+      description: |
+        Every push decision for a conversation, newest first (max 100).
+        `status` is `sent` (FCM accepted it), `failed` (FCM rejected it —
+        `reason` carries the error), `recorded_no_credentials` (test mode:
+        no FCM credentials are configured, so the would-be push is recorded
+        here instead of sent), or `skipped_live_socket` (a socket was
+        connected, so no push was needed). `device_token_prefix` is the
+        first 12 characters of the token — the full token is never exposed.
+      parameters:
+        - name: conversation_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Push attempts for the conversation.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conversation_id, attempts]
+                properties:
+                  conversation_id:
+                    type: string
+                    format: uuid
+                  attempts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PushAttempt'
+              example:
+                conversation_id: 1bf5844c-e9a3-4fcc-a2c1-dcbebb5a986a
+                attempts:
+                  - id: 1
+                    conversation_id: 1bf5844c-e9a3-4fcc-a2c1-dcbebb5a986a
+                    device_token_prefix: fcm-test-tok
+                    title: Media Test Support
+                    body: Your order ORD-78412 totals $129.99.
+                    status: recorded_no_credentials
+                    reason: No FCM credentials configured — test mode, push recorded only
+                    created_at: '2026-11-23T00:06:00+00:00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ConversationNotFound'
+  /api/v1/admin/mobile/fcm-config:
+    post:
+      tags: [mobile-admin]
+      operationId: saveFcmConfig
+      summary: Store the org's FCM service-account JSON (dashboard admin only)
+      description: |
+        The Flutter app never handles FCM service-account keys: an org admin
+        stores them once from the dashboard. The JSON is stored encrypted
+        and is **never** returned by any GET — the GET returns masked status
+        only. Once configured, pushes go out for real via `firebase-admin`
+        and attempts are recorded `sent` / `failed`; until then the
+        test-mode recording of `GET /api/v1/mobile/push-attempts` applies.
+      security:
+        - DashboardAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [service_account_json]
+              properties:
+                service_account_json:
+                  type: object
+                  description: Firebase service-account JSON object.
+                  example:
+                    type: service_account
+                    project_id: demo-proj
+                    private_key: '-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----\n'
+                    client_email: x@demo-proj.iam.gserviceaccount.com
+      responses:
+        '200':
+          description: Credentials stored.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [configured, project_id]
+                properties:
+                  configured:
+                    type: boolean
+                    example: true
+                  project_id:
+                    type: string
+                    example: demo-proj
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Not a service-account JSON object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: service_account_json must be a Firebase service-account JSON object (type 'service_account', with project_id and private_key)
+    get:
+      tags: [mobile-admin]
+      operationId: getFcmConfig
+      summary: FCM configuration status (masked, dashboard admin only)
+      security:
+        - DashboardAuth: []
+      responses:
+        '200':
+          description: Masked status only — the service-account JSON is never returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [configured, project_id, updated_at]
+                properties:
+                  configured:
+                    type: boolean
+                    example: true
+                  project_id:
+                    type: string
+                    nullable: true
+                    example: demo-proj
+                  updated_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/admin/mobile/blocked-visitors:
+    get:
+      tags: [mobile-admin]
+      operationId: listBlockedVisitors
+      summary: List blocked visitors (dashboard admin only)
+      security:
+        - DashboardAuth: []
+      responses:
+        '200':
+          description: Blocked visitors for the admin's organisation.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  blocked:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BlockedVisitor'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [mobile-admin]
+      operationId: blockVisitor
+      summary: Block a visitor (dashboard admin only)
+      security:
+        - DashboardAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                customer_id:
+                  type: string
+                ip_address:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Visitor blocked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlockedVisitor'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/admin/mobile/blocked-visitors/{blocked_id}:
+    delete:
+      tags: [mobile-admin]
+      operationId: unblockVisitor
+      summary: Unblock a visitor (dashboard admin only)
+      security:
+        - DashboardAuth: []
+      parameters:
+        - name: blocked_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Visitor unblocked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Blocked visitor not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: Blocked visitor not found
+  /api/v1/admin/mobile/widgets/{widget_id}/security:
+    get:
+      tags: [mobile-admin]
+      operationId: getWidgetSecurity
+      summary: Per-widget mobile limits + kill switch (dashboard admin only)
+      description: |
+        Returns the widget's **effective** values: stored overrides merged
+        onto the defaults (see `RateLimits`), so no field is ever null.
+        `chat_disabled: true` is the kill switch — starting and sending
+        both refuse with 403 while it is on.
+      security:
+        - DashboardAuth: []
+      parameters:
+        - name: widget_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Effective per-widget security settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WidgetSecurity'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Widget not found in the admin's organisation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: Widget not found
+    put:
+      tags: [mobile-admin]
+      operationId: setWidgetSecurity
+      summary: Set per-widget mobile limits + kill switch (dashboard admin only)
+      description: |
+        Partial update: only the fields sent are changed; omitted fields
+        keep their stored value (or the default, when nothing is stored).
+      security:
+        - DashboardAuth: []
+      parameters:
+        - name: widget_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WidgetSecurity'
+      responses:
+        '200':
+          description: Updated settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WidgetSecurity'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Widget not found in the admin's organisation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                detail: Widget not found
+  /api/v1/admin/mobile/abuse-events:
+    get:
+      tags: [mobile-admin]
+      operationId: listAbuseEvents
+      summary: Abuse-event log (dashboard admin only)
+      description: |
+        Append-only log of rate-limit hits, blocks, temp bans, kill-switch
+        refusals and AI-quota spikes, newest first.
+      security:
+        - DashboardAuth: []
+      parameters:
+        - name: widget_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: event_type
+          in: query
+          schema:
+            type: string
+            enum: [rate_limited, challenge, temp_ban, blocked_visitor, kill_switch, ai_quota, ai_spike]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 500
+      responses:
+        '200':
+          description: Abuse events, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AbuseEvent'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+components:
+  securitySchemes:
+    ConversationToken:
+      type: apiKey
+      in: header
+      name: X-Conversation-Token
+      description: |
+        The visitor JWT minted by `POST /api/v1/mobile/conversations`
+        (1 hour, tied to one widget + customer + conversation, and to the
+        device when one was sent at start). No dashboard login, no API key,
+        no session cookie is accepted on the visitor endpoints.
+    DeviceId:
+      type: apiKey
+      in: header
+      name: X-Device-Id
+      description: |
+        Optional. The client-generated stable device id sent as `device_id`
+        when the conversation started. A token presented from a different
+        device is refused with 401 ("Conversation token was issued to
+        another device"). Clients that never sent a device id carry no
+        device claim, so nothing is checked for them.
+    DashboardAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Dashboard session (cookie) or bearer token of an org admin. Only
+        for the `/api/v1/admin/mobile/*` endpoints; never sent from a
+        mobile app.
+  parameters:
+    ConversationId:
+      name: conversation_id
+      in: path
+      required: true
+      description: The conversation id returned by `POST /conversations` (the widget `session_id`).
+      schema:
+        type: string
+        format: uuid
+  responses:
+    Unauthorized:
+      description: Missing, invalid or expired conversation token (or a token presented from another device).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            expired:
+              value:
+                detail: Invalid or expired conversation token
+            otherDevice:
+              value:
+                detail: Conversation token was issued to another device
+    Forbidden:
+      description: |
+        Blocked visitor, temp ban, or the widget's kill switch is on. The
+        detail never says which list the visitor is on.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            blocked:
+              value:
+                detail: This visitor is blocked
+            killSwitch:
+              value:
+                detail: Chat is disabled for this widget
+            tempBan:
+              value:
+                detail: Temporarily blocked for suspicious activity
+    ConversationNotFound:
+      description: >
+        Conversation not found, or not this token's conversation. A visitor
+        must not learn whether another customer's conversation exists, so a
+        cross-customer id is 404, not 403.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            detail: Conversation not found
+    RateLimited:
+      description: |
+        Rate limit or AI quota spent. Always carries a `Retry-After` header
+        (seconds). Redis being down fails open — a broken counter never
+        stops the chat.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds to wait before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            perConversation:
+              value:
+                detail: Too many messages for this conversation (30/min)
+            aiQuota:
+              value:
+                detail: Daily AI reply limit reached for this conversation
+            challenge:
+              value:
+                detail: Suspicious activity detected; please wait a moment and try again
+  schemas:
+    StartConversationRequest:
+      type: object
+      required: [widget_id]
+      properties:
+        widget_id:
+          type: string
+          format: uuid
+          description: The widget the app chats with. Public — shown in the dashboard under Settings → API Docs.
+          example: 72e0025a-d062-40a2-a1d5-6598e84bf4a2
+        visitor_name:
+          type: string
+          description: Stored on the visitor record.
+          example: Ahtisham
+        visitor_email:
+          type: string
+          format: email
+          description: |
+            Stored on the visitor record. If it matches an existing customer
+            of the widget's organisation, that customer is reused.
+          example: visitor@example.com
+        conversation_token:
+          type: string
+          description: A stored token, to resume its conversation.
+        device_id:
+          type: string
+          description: |
+            Client-generated stable device id (e.g. a UUID stored on
+            device). The issued token is bound to it; later calls send it
+            as `X-Device-Id`.
+          example: 550e8400-e29b-41d4-a716-446655440000
+    Conversation:
+      type: object
+      required: [conversation_id, conversation_token, customer_id, widget_id, agent_name, created, expires_in]
+      properties:
+        conversation_id:
+          type: string
+          format: uuid
+          description: The conversation id (= widget `session_id`). The same id the web widget and the inbox use.
+        conversation_token:
+          type: string
+          description: The visitor JWT. Send as `X-Conversation-Token`; also the Socket.IO auth for `/widget`.
+        customer_id:
+          type: string
+        widget_id:
+          type: string
+          format: uuid
+        agent_name:
+          type: string
+          example: Media Test Support
+        created:
+          type: boolean
+          description: "`true` = a new conversation was opened; `false` = resumed."
+        expires_in:
+          type: integer
+          description: Seconds until the token expires (3600 = 1 hour).
+          example: 3600
+    Message:
+      type: object
+      required: [id, sender, text, message_type, attachments, created_at]
+      properties:
+        id:
+          type: integer
+          description: Server message id. Dedupe socket vs polling by this id.
+          example: 20
+        sender:
+          type: string
+          enum: [visitor, ai, agent]
+        text:
+          type: string
+          nullable: true
+        message_type:
+          type: string
+          enum: [user, bot, agent]
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attachment'
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        user_name:
+          type: string
+          nullable: true
+          description: Set on human agent messages.
+        agent_name:
+          type: string
+          nullable: true
+          example: Media Test Support
+    Attachment:
+      type: object
+      required: [filename, file_url, content_type, file_size]
+      properties:
+        filename:
+          type: string
+          example: order-image.png
+        file_url:
+          type: string
+          description: Signed, time-limited URL — fetch promptly, do not cache as permanent.
+        content_type:
+          type: string
+          example: image/png
+        file_size:
+          type: integer
+          example: 23117
+    PushAttempt:
+      type: object
+      required: [id, conversation_id, device_token_prefix, title, body, status]
+      properties:
+        id:
+          type: integer
+        conversation_id:
+          type: string
+          format: uuid
+        device_token_prefix:
+          type: string
+          description: First 12 characters of the FCM token.
+          example: fcm-test-tok
+        title:
+          type: string
+          example: Media Test Support
+        body:
+          type: string
+          example: Your order ORD-78412 totals $129.99.
+        status:
+          type: string
+          enum: [sent, failed, recorded_no_credentials, skipped_live_socket]
+        reason:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+    BlockedVisitor:
+      type: object
+      properties:
+        id:
+          type: string
+        customer_id:
+          type: string
+          nullable: true
+        ip_address:
+          type: string
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+    WidgetSecurity:
+      type: object
+      description: |
+        Per-widget mobile settings. GET returns effective values (stored
+        overrides merged onto the defaults, never null). PUT accepts a
+        partial object — only the fields sent change.
+      properties:
+        widget_id:
+          type: string
+          format: uuid
+        msg_per_min:
+          type: integer
+          description: Messages per minute per conversation. Default 30.
+          example: 30
+        msg_per_ip_per_min:
+          type: integer
+          description: Messages per minute per IP per widget. Default 120.
+          example: 120
+        msg_per_widget_per_min:
+          type: integer
+          description: Messages per minute per widget. Default 600.
+          example: 600
+        ai_daily_quota_per_conversation:
+          type: integer
+          description: AI replies per day per conversation. Default 200.
+          example: 200
+        ai_daily_quota_per_widget:
+          type: integer
+          description: AI replies per day per widget. Default 2000.
+          example: 2000
+        upload_files_per_day:
+          type: integer
+          description: Uploaded files per day per conversation. Default 20.
+          example: 20
+        upload_bytes_per_day:
+          type: integer
+          description: Uploaded bytes per day per conversation. Default 52428800 (50 MB).
+          example: 52428800
+        chat_disabled:
+          type: boolean
+          description: Kill switch — chat is disabled for this widget.
+          example: false
+    AbuseEvent:
+      type: object
+      properties:
+        id:
+          type: integer
+        event_type:
+          type: string
+          enum: [rate_limited, challenge, temp_ban, blocked_visitor, kill_switch, ai_quota, ai_spike]
+        widget_id:
+          type: string
+          format: uuid
+          nullable: true
+        session_id:
+          type: string
+          format: uuid
+          nullable: true
+        ip_address:
+          type: string
+          nullable: true
+          description: The caller IP as recorded for the event.
+        detail:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+          example: Invalid or expired conversation token
+    RateLimits:
+      type: object
+      description: |
+        Default limits (per widget overridable via `PUT
+        /api/v1/admin/mobile/widgets/{widget_id}/security`). All message
+        limits are sliding windows; AI and upload limits reset at UTC
+        midnight. Every 429 carries a `Retry-After` header in seconds.
+      properties:
+        messages_per_conversation_per_minute:
+          type: integer
+          example: 30
+        messages_per_ip_per_minute:
+          type: integer
+          example: 120
+        messages_per_widget_per_minute:
+          type: integer
+          example: 600
+        ai_replies_per_conversation_per_day:
+          type: integer
+          example: 200
+        ai_replies_per_widget_per_day:
+          type: integer
+          example: 2000
+        uploads_per_conversation_per_day:
+          type: integer
+          example: 20
+        upload_bytes_per_conversation_per_day:
+          type: integer
+          example: 52428800
+        spam_challenge_score:
+          type: integer
+          description: Identical repeat +50; 3–5 links +20; 6+ links +40; message over 4000 chars +10. At 40 the visitor is slowed (429); at 70 temp-banned 15 minutes (403).
+          example: 40
+        temp_ban_seconds:
+          type: integer
+          example: 900
+    SocketIO:
+      type: object
+      description: |
+        Live replies reuse the web widget's channel exactly — no separate
+        mobile namespace exists. URL: same host, Socket.IO path default
+        (`/socket.io/`), namespace `/widget`, connect auth
+        `{"conversation_token": "<token>"}`. The server joins the socket to
+        the conversation room and emits `session_initialized`. The client
+        does NOT send chat over the socket — chat goes over REST. Server
+        events: `session_initialized` (`session_id` == `conversation_id`),
+        `bot_typing` (`session_id`), `chat_response` — the AI reply
+        (`message_id`, `message`, `type: "chat_response"`, `session_id`,
+        `transfer_to_human`, `end_chat`, `request_rating`,
+        `quick_replies`, `sources`, `shopify_output`) — or, with
+        `type: "agent_message"`, a human agent's reply (`message_type:
+        "agent"`, `attachments`), and `error` (`token_invalid` → re-auth
+        via `POST /conversations`; `conversation_gone` → start a new
+        conversation). Dedupe socket vs polling by `message_id`.
+        `quick_replies` render as tappable chips; tapping one sends its
+        text via `POST .../messages`. `transfer_to_human: true` means the
+        next reply is human; `end_chat: true` means the conversation was
+        closed — offer "Start a new chat".
+      properties:
+        namespace:
+          type: string
+          example: /widget
+        auth:
+          type: object
+          properties:
+            conversation_token:
+              type: string

@@ -47,11 +47,19 @@ export const PANEL_COPY = {
     /** Shows the reply in full at once (server-side stop comes with plan 2.5). */
     stop: 'Stop',
     attach: 'Attach a file',
+    /** The mic button beside attach, and the recording row it opens. */
+    recordVoice: 'Record a voice note',
+    stopRecording: 'Stop recording',
+    cancelRecording: 'Cancel recording',
+    recordingVoice: 'Recording voice note',
+    voiceNote: 'Voice note',
+    micDenied: 'Microphone access was denied. Allow microphone access to record a voice note.',
+    micUnavailable: 'Voice recording is not available in this browser.',
     /** While picked files upload. Same text as classic. */
     uploading: 'Uploading files...',
-    /** The footer link: "Powered by ChatterMate" (its accessible name). */
+    /** The footer link: "Powered by WeTracer" (its accessible name). */
     poweredBy: 'Powered by',
-    brandName: 'ChatterMate',
+    brandName: 'WeTracer',
     removeFile: (name: string) => `Remove ${name}`,
     /** The label row above an answer: the agent's own name, as the merchant wrote it. */
     answerLabel: (agent: string) => agent.trim() || 'Assistant',

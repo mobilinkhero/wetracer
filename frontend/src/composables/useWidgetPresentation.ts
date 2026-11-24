@@ -54,7 +54,7 @@ const THEME_CLASS_MAP: Record<string, string> = {
 
 // File upload limits for the attach control.
 const MAX_FILES = 3
-const ACCEPT_TYPES = 'image/*,.pdf,.doc,.docx,.txt,.csv,.xlsx,.xls'
+const ACCEPT_TYPES = 'image/*,audio/*,.pdf,.doc,.docx,.txt,.csv,.xlsx,.xls'
 
 /**
  * What the widget looks like and says, derived from the customization and the
@@ -105,10 +105,10 @@ export function useWidgetPresentation({
 
     // Attachments only allowed when:
     // 1. allow_attachments setting is enabled
-    // 2. Chat has been handed over to a human agent (no need to wait for agent message)
-    // 3. Haven't reached max file limit
+    // 2. Haven't reached max file limit
+    // No handover needed: files (including voice notes) may go to the AI too.
     const canUploadMore = computed(() =>
-        allowAttachments.value && isHandedOverToHuman.value && uploadedAttachments.value.length < MAX_FILES
+        allowAttachments.value && uploadedAttachments.value.length < MAX_FILES
     )
 
     // Use the generated aurora orb when the user explicitly picked "orb", or as the Aurora

@@ -16,7 +16,7 @@ limitations under the License.
 
 <script setup lang="ts">
 // Under the composer: the AI disclosure (dropped once a person takes over) and the
-// "Powered by ChatterMate" link (unless the plan hides it), one above the other: the
+// "Powered by WeTracer" link (unless the plan hides it), one above the other: the
 // full disclosure does not share a line with the link at the panel's width.
 // Screens with no conversation (workflow, unavailable) show the link only.
 import { computed, inject } from 'vue'

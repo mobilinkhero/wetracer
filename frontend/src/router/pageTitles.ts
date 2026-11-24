@@ -44,6 +44,7 @@ export const PAGE_TITLES = {
   '/settings/integrations': 'Integrations',
   '/settings/app-integrations': 'App Integrations',
   '/settings/widget-apps': 'Widget Apps',
+  '/settings/api-docs': 'API Docs',
   '/settings/ai-config': 'AI Configuration',
   '/settings/user': 'User Settings',
   '/settings/access-tokens': 'CLI & API tokens',

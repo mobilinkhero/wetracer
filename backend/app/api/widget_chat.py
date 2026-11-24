@@ -15,6 +15,7 @@ limitations under the License.
 """
 
 import asyncio
+import base64
 import datetime
 import json
 import os
@@ -48,6 +49,7 @@ from app.utils.keyed_lock import KeyedLock
 from app.services import conversation_token as conversation_token_service
 from app.services.workflow_chat import WorkflowChatService
 from app.services.file_upload_service import FileUploadService
+from app.services.media_ai import prepare_media_context
 from app.services.file_storage import resolve_public_url
 from app.services.visitor_payload import visitor_attributes, visitor_message, visitor_error
 
@@ -130,6 +132,25 @@ async def _client_attachments(uploaded_files: list) -> list:
         }
         for file_info in uploaded_files or []
     ]
+
+
+def _media_inputs(raw_files: list, uploaded_files: list) -> list:
+    """Upload results merged with the raw bytes, for media_ai.
+
+    The upload service only returns metadata; the bytes still live in the
+    socket payload's base64 ``content``. Pair them positionally — the
+    upload loop preserves order and aborts the turn on any failure, so
+    the two lists always line up.
+    """
+    inputs = []
+    for raw, uploaded in zip(raw_files or [], uploaded_files or []):
+        entry = dict(uploaded)
+        try:
+            entry['content_bytes'] = base64.b64decode(raw.get('content') or '')
+        except Exception:
+            logger.warning(f"Could not decode attachment bytes for {uploaded.get('filename')}")
+        inputs.append(entry)
+    return inputs
 
 def validate_email(email: str) -> bool:
     """Validate email format"""
@@ -368,6 +389,19 @@ async def widget_connect(sid, environ, auth):
         if not may_stand_for(CustomerRepository(db).get_by_id(customer_id), scope):
             _refuse_connection('Visitor not authorized yet', 'customer_required')
 
+        # Phase 1 abuse control (mobile_security): a blocked visitor (customer
+        # or IP) is refused here exactly as on the mobile REST API, and the
+        # per-IP / per-widget concurrent-connection caps apply. The socket's
+        # own heartbeat (ping_interval 25s / ping_timeout 60s in socketio.py)
+        # is the idle timeout: a client that stops answering pongs is dropped.
+        from app.services import mobile_security
+        _ws_ip = ((environ or {}).get('HTTP_X_FORWARDED_FOR') or '').split(',')[0].strip() \
+            or (environ or {}).get('REMOTE_ADDR') or 'unknown'
+        if mobile_security.is_blocked(db, org_id, customer_id=customer_id, ip=_ws_ip) is not None:
+            _refuse_connection('This visitor is blocked', 'visitor_blocked')
+        if not mobile_security.ws_connect_allowed(_ws_ip, widget_id, sid):
+            _refuse_connection('Too many connections', 'connection_limit')
+
         # Get AI config for widget's organization
         ai_config_repo = AIConfigRepository(db)
         ai_config = ai_config_repo.get_active_config(org_id)
@@ -417,6 +451,10 @@ async def widget_connect(sid, environ, auth):
         session_data = {
             'widget_id': widget_id,
             'org_id': org_id,
+            # Phase 1 connection caps: the disconnect handler below needs
+            # these to drop the sid from the Redis cap sets.
+            '_ws_ip': _ws_ip,
+            '_ws_widget_id': widget_id,
             'agent_id': str(widget.agent_id),
             'customer_id': customer_id,
             'session_id': session_id,
@@ -491,6 +529,20 @@ async def widget_connect(sid, environ, auth):
             close_session(db)
 
 
+@sio.on('disconnect', namespace='/widget')
+async def widget_disconnect(sid):
+    """Drop the sid from the Phase 1 connection-cap sets (mobile_security).
+    Best-effort: a missed disconnect only inflates the caps until the Redis
+    entries expire (WS_CONN_TTL_SECONDS)."""
+    try:
+        session = await sio.get_session(sid, namespace='/widget')
+    except Exception:
+        session = None
+    if session:
+        from app.services import mobile_security
+        mobile_security.ws_disconnect(session.get('_ws_ip'), session.get('_ws_widget_id'), sid)
+
+
 @sio.on('chat', namespace='/widget')
 @socket_rate_limit(namespace='/widget')
 async def handle_widget_chat(sid, data):
@@ -552,22 +604,7 @@ async def handle_widget_chat(sid, data):
                     agent.allowed_attachment_types if agent else None
                 )
                 friendly_types = FileUploadService.get_friendly_allowed_types_message(allowed_types)
-                
-                # Check if chat is handed over to human agent
-                # Check if there's any agent message in the conversation
-                from app.models import ChatHistory
-                agent_message_exists = db_temp.query(ChatHistory).filter(
-                    ChatHistory.session_id == session_id,
-                    ChatHistory.message_type == 'agent'
-                ).first()
-                
-                if not agent_message_exists:
-                    await sio.emit('error', {
-                        'error': 'Attachments are only available when the chat is handed over to a human agent',
-                        'type': 'validation_error'
-                    }, room=sid, namespace='/widget')
-                    return
-                
+
                 # Upload each file with security validation
                 for file_data in files:
                     try:
@@ -724,19 +761,77 @@ async def handle_widget_chat(sid, data):
             # rather than hold it through the call
             release_connection(db)
             chat_agent = await create_widget_agent(agent_kwargs)
+            # Files sent with this message: turn them into something the
+            # model can use (extracted text, voice transcript, images as
+            # vision input). Failures here must not fail the turn — the
+            # files are still stored on the message, and the model answers
+            # the plain text.
+            media_images = None
+            model_message = message
+            if uploaded_files:
+                try:
+                    media = await prepare_media_context(
+                        _media_inputs(files, uploaded_files),
+                        api_key=decrypt_api_key(session['ai_config'].encrypted_api_key),
+                        model_type=session['ai_config'].model_type,
+                        model_name=session['ai_config'].model_name,
+                    )
+                    media_images = media.images or None
+                    if media.context_text:
+                        model_message = (f"{media.context_text}\n\n{message}"
+                                         if message.strip() else media.context_text)
+                except Exception as media_err:
+                    logger.error(f"Media preparation failed for session {session_id}: {media_err}")
             try:
-                # Get response from ai agent (this already handles end chat internally)
-                response = await chat_agent.get_response(
-                    message=message,
-                    session_id=chat_agent.agent.session_id,
-                    org_id=org_id,
-                    agent_id=session['agent_id'],
-                    customer_id=customer_id)
+                # Streamed turn (docs/STREAMING-PROTOCOL.md): token events go
+                # to the room as they arrive; the finished ChatResponse lands
+                # on chat_agent.last_stream_response and is delivered below
+                # by the shared deliver_ai_reply, exactly like before. A turn
+                # the lean agent cannot take (tools, host actions, lead
+                # capture, ...) yields no token events — just a done with
+                # source model-full — and the client waits for chat_response.
+                response = None
+                async for stream_event in chat_agent.stream_response(
+                        message=message,
+                        model_message=model_message,
+                        images=media_images,
+                        attachments=uploaded_files or None,
+                        session_id=chat_agent.agent.session_id,
+                        org_id=org_id,
+                        agent_id=session['agent_id'],
+                        customer_id=customer_id):
+                    event_type = stream_event.get("type")
+                    if event_type == "start":
+                        await sio.emit('chat_response_stream_start', {
+                            'session_id': session_id,
+                            'source': stream_event.get("source"),
+                            'message_id': stream_event.get("message_id"),
+                        }, room=session_id, namespace='/widget')
+                    elif event_type == "token":
+                        await sio.emit('chat_response_stream_token', {
+                            'session_id': session_id,
+                            'delta': stream_event.get("delta", ""),
+                            'source': stream_event.get("source"),
+                        }, room=session_id, namespace='/widget')
+                    elif event_type == "done":
+                        await sio.emit('chat_response_stream_done', {
+                            'session_id': session_id,
+                            'source': stream_event.get("source"),
+                            'message_id': stream_event.get("message_id"),
+                            'paused': stream_event.get("paused", False),
+                        }, room=session_id, namespace='/widget')
+                    elif event_type == "error":
+                        await sio.emit('chat_response_stream_error', {
+                            'session_id': session_id,
+                            'error': stream_event.get("error", "Streaming failed"),
+                        }, room=session_id, namespace='/widget')
+                response = chat_agent.last_stream_response
             finally:
                 await chat_agent.safe_cleanup_mcp_tools()
-            if isinstance(response, PausedTurn):
+            if chat_agent.last_paused_turn is not None:
                 # The page runs the action; the reply follows its answer.
-                await start_paused_turn(sid, session, response, host_actions, db)
+                await start_paused_turn(sid, session, chat_agent.last_paused_turn,
+                                        host_actions, db)
                 return
         elif plan_allows and active_session.status == SessionStatus.TRANSFERRED and active_session.user_id is None: # transferred and user has not taken over
             await emit_bot_typing(session_id)

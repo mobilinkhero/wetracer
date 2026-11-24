@@ -49,6 +49,7 @@ Every integration ships in the open-source codebase — see [Integrations](#inte
 - [ChatterMate vs. Intercom, Zendesk & Chatbase](#chattermate-vs-intercom-zendesk--chatbase)
 - [Screenshots](#screenshots)
 - [Quick Start](#quick-start)
+- [Install on a fresh VPS in one command](#install-on-a-fresh-vps-in-one-command)
 - [Installation](#installation-methods)
 - [Deployment](#deployment)
 - [FAQ](#faq)
@@ -445,6 +446,59 @@ chattermate-deploy reset                  # Reset and remove all data
 > (`pip install chattermate-cli`) signs you up and manages agents/knowledge against the
 > ChatterMate API. The **self-host CLI** (`npm install -g chattermate-deploy`) scaffolds and runs
 > the Docker stack. They are separate tools that happen to share the `chattermate` name.
+
+---
+
+## Install on a fresh VPS in one command
+
+No Docker, no manual setup, no checklist of commands to run one by one.
+One command on a fresh **Ubuntu 22.04 or 24.04** VPS does everything itself —
+system packages, PostgreSQL 16 + pgvector, Redis, the database, secrets,
+Python + Node builds, systemd services, nginx, and free HTTPS when you give
+it a domain:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NEW_OWNER/chattermate/main/install.sh \
+  | sudo bash -s -- your-domain.com
+```
+
+No domain? Leave it off and the installer uses the server's public IP over
+HTTP instead:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NEW_OWNER/chattermate/main/install.sh \
+  | sudo bash
+```
+
+> Replace `NEW_OWNER/chattermate` with the real repo once it is published.
+> You can also clone the repo and run `sudo bash install.sh your-domain.com`.
+
+**What you need first:** a fresh Ubuntu 22.04/24.04 VPS with ~2 GB RAM, a
+public IP, and (for HTTPS) a domain whose DNS already points at the server.
+The whole install takes roughly 10–20 minutes, mostly pip/npm builds.
+
+**When it finishes**, it prints the app URL. Open `<your-url>/setup` and
+create your admin account — the first account owns the workspace, there is
+no default password. Then add your AI provider key in the dashboard
+(Settings → AI Setup), or the AI chat will not answer.
+
+**Afterwards:**
+
+```bash
+sudo bash /opt/chattermate/update.sh   # pull latest code + rebuild + restart
+systemctl status chattermate-backend    # backend service
+journalctl -u chattermate-backend -f    # backend logs
+```
+
+Secrets (database password, JWT and encryption keys) live in
+`/opt/chattermate/backend/.env` — back that file up separately from the
+database. Losing the encryption key makes stored credentials and chat
+history unreadable. Re-running `install.sh` is safe: it never overwrites
+that file and never drops the database.
+
+Prefer Docker instead? The original `docker-compose.yml` is still in this
+repo (`docker compose up -d`), but the one-command install above is the
+recommended path — it is what a fresh VPS install should feel like.
 
 ---
 

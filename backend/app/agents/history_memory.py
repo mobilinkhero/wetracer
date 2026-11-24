@@ -107,6 +107,7 @@ async def run_with_overflow_recovery(
     session_id: str,
     timeout: float,
     before_retry: Optional[Callable[[], None]] = None,
+    images: Optional[list] = None,
 ) -> Any:
     """One agent run under ``timeout``.
 
@@ -114,12 +115,16 @@ async def run_with_overflow_recovery(
     replayed history inside what is left of the timeout. Without this a
     session whose history outgrew the window fails on every later turn.
     ``before_retry`` resets per-turn tool state so the retry is a fresh turn.
+    ``images`` (agno Image objects) are passed to both attempts, so a
+    multimodal turn retries with its images intact.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     try:
         return await asyncio.wait_for(
-            agent.arun(message=message, session_id=session_id, stream=False), timeout=timeout
+            agent.arun(message=message, session_id=session_id, stream=False,
+                       images=images),
+            timeout=timeout,
         )
     except asyncio.TimeoutError:
         raise
@@ -138,7 +143,8 @@ async def run_with_overflow_recovery(
             before_retry()
         with memory.without_history():
             return await asyncio.wait_for(
-                agent.arun(message=message, session_id=session_id, stream=False),
+                agent.arun(message=message, session_id=session_id, stream=False,
+                           images=images),
                 timeout=remaining,
             )
 

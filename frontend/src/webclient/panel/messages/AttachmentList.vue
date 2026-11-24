@@ -49,6 +49,14 @@ const preview = (attachment: Attachment) => ctrl.openPreview({
             >
                 <img :src="ctrl.getDownloadUrl(attachment.file_url)" alt="" loading="lazy">
             </button>
+            <audio
+                v-else-if="ctrl.isAudioAttachment(attachment.content_type)"
+                controls
+                preload="metadata"
+                class="cm-attachments__audio"
+                :src="ctrl.getDownloadUrl(attachment.file_url)"
+                :aria-label="attachment.filename"
+            ></audio>
             <a
                 class="cm-attachments__link"
                 :href="ctrl.getDownloadUrl(attachment.file_url)"
@@ -68,5 +76,6 @@ const preview = (attachment: Attachment) => ctrl.openPreview({
 .cm-attachments__item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .cm-attachments__thumb { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; max-width: 220px; }
 .cm-attachments__thumb img { display: block; width: 100%; max-height: 180px; object-fit: cover; }
+.cm-attachments__audio { display: block; width: 100%; max-width: 260px; height: 36px; }
 .cm-attachments__link { display: inline-flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
 </style>

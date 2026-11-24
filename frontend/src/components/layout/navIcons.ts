@@ -34,6 +34,7 @@ export const NAV_ICONS: Record<string, string> = {
     integrations: '<line x1="12" y1="12" x2="6" y2="6"/><line x1="12" y1="12" x2="18" y2="6"/><line x1="12" y1="12" x2="12" y2="19"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="19" r="2"/>',
     widgets: '<rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><circle cx="16.5" cy="16.5" r="3.5"/>',
     aiconfig: '<line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="9" cy="8" r="2.4"/><circle cx="15" cy="16" r="2.4"/>',
+    api: '<polyline points="8 6 2.5 12 8 18"/><polyline points="16 6 21.5 12 16 18"/>',
     usersettings: '<circle cx="12" cy="8" r="3.4"/><path d="M5.5 19a6.5 5.5 0 0 1 13 0"/>',
     key: '<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3"/><path d="M16 7l3 3"/><path d="M14 9l2 2"/>',
     more: '<circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/>',

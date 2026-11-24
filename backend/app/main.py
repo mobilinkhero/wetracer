@@ -310,6 +310,26 @@ app.include_router(
     tags=["widget"]
 )
 
+# Flutter SDK (no WebView): public REST chat API + push registration.
+# Visitor endpoints authenticate with the conversation token only; the FCM
+# credential endpoints inside use dashboard auth.
+from app.api import mobile_chat
+app.include_router(
+    mobile_chat.router,
+    prefix=f"{settings.API_V1_STR}/mobile",
+    tags=["mobile"]
+)
+
+# Admin side of the mobile API (FCM credentials, blocked visitors, kill
+# switch, abuse log). Dashboard auth only — the public mobile router exposes
+# zero admin operations.
+from app.api import mobile_admin
+app.include_router(
+    mobile_admin.router,
+    prefix=f"{settings.API_V1_STR}/admin/mobile",
+    tags=["mobile-admin"]
+)
+
 app.include_router(
     widget_frame.router,
     prefix=f"{settings.API_V1_STR}/widgets",

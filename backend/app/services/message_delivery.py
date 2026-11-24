@@ -90,12 +90,38 @@ async def deliver_to_customer(db: Session, session_record: SessionToAgent, paylo
 
     if channel == WEB_CHANNEL:
         await sio.emit('chat_response', payload, room=session_id, namespace='/widget')
+        await _maybe_push(db, session_record, payload, message_id, source)
         return DeliveryResult(ok=True)
 
     result = await _deliver_to_channel(db, session_record, channel, payload,
                                        message_id, interactive, source)
     await sio.emit('chat_response', payload, room=session_id, namespace='/widget')
+    await _maybe_push(db, session_record, payload, message_id, source)
     return result
+
+
+async def _maybe_push(db: Session, session_record: SessionToAgent, payload: dict,
+                      message_id: Optional[int], source: MessageSource) -> None:
+    """Flutter SDK push for a reply delivered here.
+
+    This is the human-reply hook: the inbox agent-message handler, channel
+    replies and ticket replies all deliver through this function. AI replies
+    have their own hook in widget_reply.deliver_ai_reply; push_service dedupes
+    on (session_id, message_id) so a reply travelling both paths pushes once.
+    """
+    try:
+        from app.repositories.agent import AgentRepository
+        from app.services.push_service import maybe_push_reply
+        agent_row = AgentRepository(db).get_agent(session_record.agent_id) if session_record.agent_id else None
+        await maybe_push_reply(
+            db, session_id=str(session_record.session_id),
+            organization_id=session_record.organization_id,
+            message_id=message_id,
+            title=(agent_row.display_name or agent_row.name) if agent_row else "ChatterMate",
+            text=str(payload.get('message') or ''),
+        )
+    except Exception as push_err:
+        logger.error(f"Push after delivery failed for session {session_record.session_id}: {push_err}")
 
 
 async def _deliver_to_channel(db: Session, session_record: SessionToAgent,

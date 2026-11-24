@@ -51,11 +51,19 @@ const { agentName, photoUrl, orbStyle, messages, loading, isMessageInputEnabled,
 
 const face = computed(() => agentFace(ctrl.customization.value, photoUrl.value))
 const inConversation = computed(() => props.index >= 0)
-const streaming = computed(() => inConversation.value && ctrl.isStreaming(props.index))
+// Live token streaming counts as streaming too: follow-ups, actions and
+// the link card wait until the reply is finalised, and the typing dots
+// are already replaced by the streaming bubble itself.
+const liveStreaming = computed(() => !!props.message.liveStream)
+const streaming = computed(() => inConversation.value && (ctrl.isStreaming(props.index) || liveStreaming.value))
 const sources = computed<AnswerSource[]>(() => (ctrl.showCitations.value ? props.message.sources ?? [] : []))
 const answer = computed(() => {
     const full = props.message.message || ''
-    const shown = streaming.value ? ctrl.displayText(props.index, full) : full
+    const shown = liveStreaming.value
+        ? `${full} ▍`
+        : streaming.value
+            ? ctrl.displayText(props.index, full)
+            : full
     return decorateAnswerLinks(renderMarkdown(shown), sources.value, {
         hostOrigin: preview ? null : hostOrigin(),
         sameTab: hostCapabilities.value.navigate,
@@ -81,6 +89,7 @@ const answerText = () => body.value?.text() ?? ''
         <div class="cm-answer__label">
             <AgentMark size="sm" :face="face" :photo-url="photoUrl" :orb-style="orbStyle" />
             <span class="cm-answer__name">{{ PANEL_COPY.answerLabel(agentName) }}</span>
+            <span v-if="message.source === 'kb'" class="cm-answer__kb">From help article</span>
         </div>
         <AnswerBody ref="body" :html="answer.html" :busy="streaming" />
         <LinkCard v-if="answer.card && !streaming" :source="answer.card" class="cm-fade" />
@@ -105,4 +114,5 @@ const answerText = () => body.value?.text() ?? ''
 
 <style scoped>
 .cm-answer__label { display: flex; align-items: center; gap: 8px; }
+.cm-answer__kb { font-size: 12px; font-style: italic; opacity: 0.65; }
 </style>

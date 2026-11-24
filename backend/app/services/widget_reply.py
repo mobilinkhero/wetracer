@@ -221,6 +221,22 @@ async def deliver_ai_reply(sid: str, session: dict, response: Optional[ChatRespo
     await sio.emit('chat_response', reply_payload(response, session_id, chat_agent, choice_limits_for(session)),
                    room=session_id, namespace=WIDGET_NAMESPACE)
 
+    # Flutter SDK: a reply delivered to a conversation with registered mobile
+    # devices and no live socket gets an FCM push (or a recorded test-mode
+    # attempt when no FCM credentials are configured). Best-effort: never
+    # fails the turn.
+    try:
+        from app.services.push_service import maybe_push_reply
+        agent_row = AgentRepository(db).get_agent(session['agent_id']) if session.get('agent_id') else None
+        await maybe_push_reply(
+            db, session_id=session_id, organization_id=session.get('org_id'),
+            message_id=getattr(chat_agent, 'last_bot_message_id', None),
+            title=(agent_row.display_name or agent_row.name) if agent_row else "ChatterMate",
+            text=response.message,
+        )
+    except Exception as push_err:
+        logger.error(f"Push after AI reply failed for session {session_id}: {push_err}")
+
     # On human handoff, optionally collect the visitor's contact details (email/name)
     # so the human agent can follow up. Fires for both a live transfer and the
     # no-agents/ticket case (request_contact). Only asks for enabled + missing fields.

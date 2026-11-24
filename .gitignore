@@ -2,6 +2,17 @@ static/
 .env
 *.ipynb
 *.key
+
+# Flutter SDK lives outside this repo (separate workspace); the whole
+# flutter_sdk/ tree — SDK package, demo app, test APK and build outputs —
+# must never be committed here. No .dart/.apk/pubspec file exists outside
+# flutter_sdk/, but the patterns below keep any stray Flutter artifact out.
+flutter_sdk/
+*.apk
+.dart_tool/
+*.dart
+pubspec.yaml
+pubspec.lock
 logs/
 __pycache__/
 .DS_Store

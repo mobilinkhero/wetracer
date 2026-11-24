@@ -32,6 +32,11 @@ export interface Message {
   session_id: string
   // Live replies are revealed client-side with a typewriter effect.
   stream?: boolean
+  // A reply still streaming in token by token (docs/STREAMING-PROTOCOL.md):
+  // render its growing text directly, not via the typewriter.
+  liveStream?: boolean
+  // Where a streamed reply comes from (`model-stream`, `kb`, `model-full`).
+  source?: string
   attributes?: Record<string, any>
   // Set on a message sent from the inbox until the backend reports its id
   client_id?: string

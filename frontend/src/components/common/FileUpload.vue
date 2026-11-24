@@ -21,6 +21,8 @@ import { resolveWidgetUploadUrl } from '../../webclient/widget-env'
 // Security: Allowed file types (matching backend)
 const ALLOWED_FILE_TYPES = new Set([
   'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
+  'audio/webm', 'audio/mp4', 'audio/m4a', 'audio/x-m4a', 'audio/ogg',
+  'audio/wav', 'audio/x-wav', 'audio/mpeg', 'audio/mp3',
   'application/pdf', 'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'text/plain', 'text/csv', 'application/vnd.ms-excel',
@@ -33,7 +35,9 @@ const EXTENSION_TO_MIME: Record<string, string> = {
   '.doc': 'application/msword',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.txt': 'text/plain', '.csv': 'text/csv', '.xls': 'application/vnd.ms-excel',
-  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.webm': 'audio/webm', '.mp4': 'audio/mp4', '.m4a': 'audio/mp4',
+  '.ogg': 'audio/ogg', '.wav': 'audio/wav', '.mp3': 'audio/mpeg'
 }
 
 // Validate extension matches MIME type
@@ -45,6 +49,11 @@ function validateExtension(filename: string, mimeType: string): { valid: boolean
   }
   const expectedMime = EXTENSION_TO_MIME[ext]
   if ((mimeType === 'image/jpeg' || mimeType === 'image/jpg') && (expectedMime === 'image/jpeg' || expectedMime === 'image/jpg')) return { valid: true }
+  // Audio containers are reported inconsistently across browsers (.m4a as
+  // audio/mp4, audio/m4a or audio/x-m4a; .wav as audio/wav or audio/x-wav;
+  // .mp3 as audio/mpeg or audio/mp3), so any audio MIME type matches any
+  // audio extension.
+  if (mimeType.startsWith('audio/') && expectedMime.startsWith('audio/')) return { valid: true }
   if (expectedMime !== mimeType) return { valid: false, error: `File extension ${ext} does not match content type` }
   return { valid: true }
 }
@@ -52,6 +61,9 @@ function validateExtension(filename: string, mimeType: string): { valid: boolean
 // Validate magic bytes
 async function validateMagicBytes(file: File): Promise<{ valid: boolean; error?: string }> {
   const mimeType = file.type
+  // Audio has no reliable magic-byte signature across containers (webm/mp4/ogg
+  // vary by codec), so it is validated by type/extension only, server-side.
+  if (mimeType.startsWith('audio/')) return { valid: true }
   if (mimeType === 'text/plain' || mimeType === 'text/csv') return { valid: true }
   if (mimeType.includes('openxmlformats') || mimeType === 'application/msword') {
     const buffer = await file.slice(0, 4).arrayBuffer()
@@ -100,7 +112,7 @@ const uploading = ref(false)
 const dragOver = ref(false)
 
 const maxFiles = computed(() => props.maxFiles || 3)
-const acceptTypes = computed(() => props.acceptTypes || 'image/*,.pdf,.doc,.docx,.txt,.csv,.xlsx,.xls')
+const acceptTypes = computed(() => props.acceptTypes || 'image/*,audio/*,.pdf,.doc,.docx,.txt,.csv,.xlsx,.xls')
 
 const canUploadMore = computed(() => uploadedFiles.value.length < maxFiles.value)
 
@@ -330,14 +342,17 @@ const uploadFiles = async (files: File[]) => {
           const base64Content = e.target?.result as string
           const base64Data = base64Content.split(',')[1]
           
+          // Audio keeps a blob URL so the staged file can be played back before
+          // sending; other documents have no preview.
+          const isAudioFile = file.type.startsWith('audio/')
           uploadedFiles.value.push({
             file: file,
             content: base64Data,
             filename: file.name,
             type: file.type || 'application/octet-stream',
             size: file.size,
-            url: '',
-            file_url: ''
+            url: isAudioFile ? URL.createObjectURL(file) : '',
+            file_url: isAudioFile ? URL.createObjectURL(file) : ''
           })
           
           emit('filesUploaded', uploadedFiles.value.map(f => ({
@@ -390,6 +405,10 @@ const formatFileSize = (bytes: number): string => {
 
 const isImage = (type: string | undefined | null): boolean => {
   return type ? type.startsWith('image/') : false
+}
+
+const isAudio = (type: string | undefined | null): boolean => {
+  return type ? type.startsWith('audio/') : false
 }
 
 // Generate preview URL for file display
@@ -487,6 +506,14 @@ defineExpose({
             :alt="file.filename"
             class="file-preview-image"
           />
+          <audio
+            v-else-if="isAudio(file.type)"
+            controls
+            preload="metadata"
+            class="file-preview-audio"
+            :src="getPreviewUrl(file)"
+            :aria-label="file.filename"
+          ></audio>
           <div v-else class="file-preview-icon">
             <svg
               width="24"
@@ -694,6 +721,14 @@ defineExpose({
 
 .file-preview:hover .file-preview-image {
   transform: scale(1.05);
+}
+
+.file-preview-audio {
+  width: 200px;
+  max-width: 100%;
+  height: 32px;
+  position: relative;
+  z-index: 1;
 }
 
 .file-preview-icon {

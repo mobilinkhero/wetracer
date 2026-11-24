@@ -234,6 +234,27 @@ def _salvage_groq_answer_text(response) -> str | None:
     return None
 
 
+def _is_vision_unsupported_error(exc: BaseException) -> bool:
+    """True when a provider rejected the turn because the model cannot take
+    image input (text-only model, vision not enabled). Matched on the
+    provider's error text, so a genuinely different failure still raises."""
+    text = str(exc).lower()
+    return any(phrase in text for phrase in (
+        "vision", "image_url", "multimodal", "does not support images",
+        "unsupported image", "images are not supported",
+        "invalid image", "content type 'image",
+    ))
+
+
+# Appended to the message when a text-only model rejects the image input:
+# the turn is retried without images and the model tells the visitor so.
+_VISION_FALLBACK_NOTE = (
+    "\n\n[Note: the visitor attached an image to this message, but this model "
+    "cannot view images. Tell the visitor you cannot see images and ask them "
+    "to describe it in words.]"
+)
+
+
 def recover_groq_no_capture(response) -> ChatResponse:
     """Groq path only: the model finished without calling the `json` tool, so
     the structured capture is empty. Recover the assistant's own answer text
@@ -526,6 +547,9 @@ class ChatAgent(ChatAgentMCPMixin):
         self.customer_id = customer_id
         self.session_id = session_id
         self.mcp_tools = mcp_tools or []
+        # Kept for the streaming gate: a turn with host actions to offer must
+        # use the full agent (its tools can pause the run), never the lean one.
+        self._host_action_functions = list(host_action_functions or [])
         
         # Determine transfer_to_human setting - use parameter if provided, otherwise use agent data
         if transfer_to_human is not None:
@@ -1073,16 +1097,18 @@ Keep your responses concise and focused. Provide clear, actionable information i
         if getattr(self, "turn_events", None) is not None:
             self.turn_events.reset()
 
-    async def _arun(self, message: str, session_id: str):
+    async def _arun(self, message: str, session_id: str, images=None):
         """One agent run under AGENT_RUN_TIMEOUT, with the context-overflow
         retry. The retry is a fresh turn, so what the failed attempt searched
-        must be searchable again."""
+        must be searchable again. ``images`` (agno Image objects) are passed
+        through so a multimodal turn retries with its images intact."""
         return await run_with_overflow_recovery(
             self.agent,
             message,
             session_id,
             timeout=settings.AGENT_RUN_TIMEOUT,
             before_retry=self._reset_turn,
+            images=images,
         )
 
     async def _get_llm_response_only(self, message: str, session_id: str = None, org_id: str = None, agent_id: str = None, customer_id: str = None) -> ChatResponse:
@@ -1457,13 +1483,40 @@ Keep your responses concise and focused. Provide clear, actionable information i
         serves a single turn, so the last one stored is this turn's reply."""
         self.last_bot_message_id = chat_repo.create_message(message_data).id
 
-    async def get_response(self, message: str, session_id: str = None, org_id: str = None, agent_id: str = None, customer_id: str = None, user_attributes: dict = None) -> ChatResponse:
+    @staticmethod
+    def _attach_files_to_message(db, chat_history_id: int, attachments: list,
+                                 org_id, customer_id) -> None:
+        """FileAttachment rows for files uploaded with a message — the same
+        rows the human-takeover paths in widget_chat create inline, so the
+        inbox and history show the AI turn's attachments too."""
+        from app.models.file_attachment import FileAttachment
+
+        for file_info in attachments or []:
+            db.add(FileAttachment(
+                file_url=file_info['file_url'],
+                filename=file_info['filename'],
+                content_type=file_info['content_type'],
+                file_size=file_info['size'],
+                chat_history_id=chat_history_id,
+                organization_id=org_id,
+                uploaded_by_customer_id=customer_id,
+            ))
+        db.commit()
+
+    async def get_response(self, message: str, session_id: str = None, org_id: str = None, agent_id: str = None, customer_id: str = None, user_attributes: dict = None, images: list = None, attachments: list = None, model_message: str = None) -> ChatResponse:
         """
         Get a response from the agent.
 
         `user_attributes` are stored on the customer's message row (e.g. the
         button a channel customer tapped). The stored reply's row id is left
         on `last_bot_message_id` so a caller can annotate that exact row.
+        `images` are agno Image objects passed to the model run (multimodal
+        turn). `attachments` are the upload results for files sent with this
+        message; FileAttachment rows are created on the stored user message.
+        `model_message` is the text actually sent to the model when it
+        differs from what is stored (e.g. media context prepended to the
+        visitor's words); the stored user message stays the plain text so
+        the widget shows what the visitor wrote.
         """
         self.last_bot_message_id = None
         self.last_handover = None
@@ -1496,7 +1549,7 @@ Keep your responses concise and focused. Provide clear, actionable information i
                 self.agent.session_id = session_id
 
                 # Create user message
-                chat_repo.create_message({
+                user_msg = chat_repo.create_message({
                     "message": message,
                     "message_type": "user",
                     "session_id": session_id,
@@ -1505,6 +1558,12 @@ Keep your responses concise and focused. Provide clear, actionable information i
                     "customer_id": customer_id,
                     "attributes": {**(user_attributes or {}), **guardrail_verdict.as_attributes()}
                 })
+
+                # Files uploaded with this message belong to it, whether a
+                # human or the AI answers (see _attach_files_to_message).
+                if attachments:
+                    self._attach_files_to_message(db, user_msg.id, attachments,
+                                                  org_id, customer_id)
 
                 if guardrail_verdict.block:
                     # Blocked pre-inference: reply with the canned line, store
@@ -1541,8 +1600,11 @@ Keep your responses concise and focused. Provide clear, actionable information i
                 release_connection(db)
                 self._groq_json_capture.clear()
                 _salvaged_content = None
+                # What the model reads: the plain message, or the caller's
+                # augmented text (media context) when one was supplied.
+                run_message = model_message or message
                 try:
-                    response = await self._arun(message, session_id)
+                    response = await self._arun(run_message, session_id, images=images)
                 except asyncio.TimeoutError:
                     logger.warning(
                         f"Agent run timed out after {settings.AGENT_RUN_TIMEOUT}s and was cancelled "
@@ -1550,14 +1612,27 @@ Keep your responses concise and focused. Provide clear, actionable information i
                     )
                     raise
                 except Exception as arun_exc:
-                    # Groq only: salvage a truncated `json` tool call (see get_response).
-                    salvaged = _salvage_groq_json_error(arun_exc) if self._use_groq_json_tool else None
-                    # Empty salvage → nothing usable; re-raise for the normal error reply.
-                    if not salvaged:
-                        raise
-                    logger.warning("Groq json tool call unparseable (likely truncated); salvaged structured fields")
-                    _salvaged_content = _build_chat_response_from_capture(salvaged, self._response_model)
-                    response = None
+                    if images and _is_vision_unsupported_error(arun_exc):
+                        # A text-only model rejected the image input: retry
+                        # the turn without images and let the model tell the
+                        # visitor it cannot see them, instead of failing.
+                        logger.warning(
+                            f"Model rejected image input; retrying turn without images "
+                            f"(session_id={session_id}): {arun_exc}"
+                        )
+                        try:
+                            response = await self._arun(run_message + _VISION_FALLBACK_NOTE, session_id)
+                        except Exception:
+                            raise arun_exc
+                    else:
+                        # Groq only: salvage a truncated `json` tool call (see get_response).
+                        salvaged = _salvage_groq_json_error(arun_exc) if self._use_groq_json_tool else None
+                        # Empty salvage → nothing usable; re-raise for the normal error reply.
+                        if not salvaged:
+                            raise
+                        logger.warning("Groq json tool call unparseable (likely truncated); salvaged structured fields")
+                        _salvaged_content = _build_chat_response_from_capture(salvaged, self._response_model)
+                        response = None
 
                 # The model called host actions: nothing is stored or sent until
                 # the page answers and continue_response finishes the reply.
@@ -1570,6 +1645,374 @@ Keep your responses concise and focused. Provide clear, actionable information i
 
         except Exception as e:
             return self._error_turn(e, session_id, org_id, agent_id, customer_id)
+
+    # ------------------------------------------------------------------
+    # Streaming replies (docs/STREAMING-PROTOCOL.md)
+    #
+    # agno 1.7.6 streams content tokens for a plain agent (arun stream=True)
+    # but NOT for an agent with response_model + structured_outputs — the
+    # structured turn arrives as one chunk at the end (verified with a stub
+    # hosted-provider streaming server, backend/tests_live/stub_provider.py).
+    # So simple turns run on a lean plain-text agent
+    # (no response_model, no tools, short prompt, compact history); anything
+    # needing structured actions falls back to the full non-streaming turn
+    # inside this same generator, and the client sees a normal complete reply.
+    # ------------------------------------------------------------------
+
+    _STREAM_BLOCKLIST = (
+        "speak to a human", "talk to a human", "talk to a person",
+        "speak to a person", "real person", "human agent", "connect me",
+    )
+
+    # A turn that actually wants a ticket still needs the full agent (the
+    # lean agent has no ticket tool); any other turn may stream even though
+    # the agent carries TicketTools.
+    _STREAM_TICKET_INTENT = (
+        "ticket", "report a problem", "report an issue", "report a bug",
+        "file a complaint", "open a case", "raise a ticket",
+    )
+
+    def _stream_eligible(self, message: str, images=None, attachments=None) -> bool:
+        """True when the lean streaming agent may answer this turn.
+
+        Anything the lean agent cannot express — a ticket the visitor asks
+        for, a Jira/Shopify turn, host actions, a workflow — goes to the
+        full agent instead, as does a message that asks for a human or says
+        goodbye (those need the structured end_chat / transfer flags).
+        Merely having TicketTools attached does not disqualify a turn: the
+        lean agent just cannot create tickets, so only ticket-intent
+        messages are routed to the full agent.
+        """
+        if images or attachments:
+            return False
+        if getattr(self, "_host_action_functions", None):
+            return False
+        if getattr(self, "extra_toolkits", None):
+            return False  # unknown extension capabilities: full agent only
+        lowered = (message or "").strip().lower()
+        for tool in getattr(self, "tools", []):
+            if type(tool).__name__ == "TicketTools":
+                if any(phrase in lowered for phrase in self._STREAM_TICKET_INTENT):
+                    return False
+                continue
+            return False  # Jira / Shopify / anything else needs its tools
+        if getattr(self, "lead_capture_enabled", False) \
+                and not getattr(self, "lead_already_captured", False):
+            return False
+        if lowered in ("goodbye", "bye", "good bye", "that's all", "that is all"):
+            return False
+        return not any(phrase in lowered for phrase in self._STREAM_BLOCKLIST)
+
+    @staticmethod
+    async def _compact_history(chat_repo: ChatRepository, session_id: str,
+                               max_turns: int = 3, max_chars: int = 1200) -> Optional[str]:
+        """Last few exchanges as compact text for the lean prompt (no agno
+        storage/memory round-trip on the streaming path)."""
+        try:
+            history = await chat_repo.get_session_history(session_id)
+        except Exception as e:
+            logger.warning(f"Streaming history lookup failed: {e}")
+            return None
+        lines = []
+        for row in history[-max_turns * 2:]:
+            role = "Visitor" if row.message_type == "user" else "Agent"
+            text = (row.message or "").strip().replace("\n", " ")
+            if text:
+                lines.append(f"{role}: {text[:300]}")
+        joined = "\n".join(lines)
+        return joined[-max_chars:] if joined else None
+
+    def _lean_instructions(self, history_text: Optional[str],
+                           kb_context: Optional[str]) -> str:
+        """Short system prompt for the streaming agent.
+
+        Deliberately NOT the full agent prompt: no operator instructions,
+        guardrail policy block, lead/ticket/transfer/end-chat/choice rules
+        and no tool descriptions — that bulk is what makes the full turn's
+        prefill slow, and the lean path answers simple questions only.
+        """
+        agent_name = getattr(self.agent_data, "name", None) or "Support"
+        org_name = (self._guardrail_ctx.org_name
+                    if getattr(self, "_guardrail_ctx", None) else None)
+        parts = [f"You are {agent_name}, a helpful support agent"
+                 + (f" for {org_name}." if org_name else "."),
+                 "Answer concisely in 2-4 sentences, in plain text only.",
+                 "Answer only from the context given below. If you do not "
+                 "know the answer, say so and offer to connect the visitor "
+                 "with the team. Never invent URLs, prices, dates, phone "
+                 "numbers, email addresses or other specific details."]
+        if kb_context:
+            parts.append("Knowledge base context (use this to answer when "
+                         f"it is relevant):\n{kb_context}")
+        if history_text:
+            parts.append("Recent conversation:\n" + history_text)
+        return "\n\n".join(parts)
+
+    async def _lean_stream_tokens(self, run_message: str, session_id: str,
+                                  history_text: Optional[str],
+                                  kb_context: Optional[str]):
+        """Yield raw text deltas from the lean agent.
+
+        Raises on timeout / empty stream so the caller can fall back to the
+        full turn. A fresh plain Agent per turn: no storage, no memory, no
+        response_model, no tools — the combination that actually streams in
+        agno 1.7.6.
+        """
+        model = create_model(
+            model_type=self.model_type, api_key=self.api_key,
+            model_name=self.model_name, max_tokens=1000, base_url=self.base_url)
+        agent = Agent(
+            name=getattr(self.agent_data, "name", None) or "Support",
+            model=model,
+            instructions=self._lean_instructions(history_text, kb_context),
+            markdown=False,
+        )
+        seen_any = False
+        async with asyncio.timeout(settings.AGENT_RUN_TIMEOUT):
+            stream = await agent.arun(run_message, stream=True)
+            async for event in stream:
+                content = getattr(event, "content", None)
+                if isinstance(content, str) and content:
+                    seen_any = True
+                    yield content
+        if not seen_any:
+            raise RuntimeError("Lean streaming run produced no content")
+
+    def _kb_chat_response(self, answer: str, source_name: str,
+                          source_type: str) -> ChatResponse:
+        """A ChatResponse for a KB instant answer (no model call)."""
+        from app.models.schemas.chat import SourceRef
+        response = ChatResponse(
+            message=answer, transfer_to_human=False, transfer_reason=None,
+            transfer_description=None, end_chat=False, end_chat_reason=None,
+            end_chat_description=None, request_rating=False, create_ticket=False,
+            shopify_output=None)
+        response.sources = [SourceRef(name=source_name, type=source_type)]
+        return response
+
+    async def stream_response(self, message: str, session_id: str = None, org_id: str = None,
+                              agent_id: str = None, customer_id: str = None,
+                              user_attributes: dict = None, images: list = None,
+                              attachments: list = None, model_message: str = None,
+                              force_model: bool = False):
+        """Stream one turn as event dicts (see docs/STREAMING-PROTOCOL.md).
+
+        Yields {"type": "start", "source": ...}, zero or more
+        {"type": "token", "delta": ...}, then {"type": "done", "source": ...}.
+        On a mid-stream failure yields {"type": "error", ...} instead of
+        "done". The finished ChatResponse is left on
+        `self.last_stream_response` (None when the turn paused on a host
+        action — then `self.last_paused_turn` holds the PausedTurn, as
+        get_response returns it). The prelude mirrors get_response: guardrail
+        check, user-message store, then KB instant answer, lean stream, or
+        the full non-streaming turn as fallback.
+        """
+        from types import SimpleNamespace
+        from app.services.kb_instant import find_kb_candidate
+
+        self.last_stream_response = None
+        self.last_paused_turn = None
+        self.last_bot_message_id = None
+        self.last_handover = None
+        self.last_ui_extras = {}
+        try:
+            if session_id:
+                self.session_id = session_id
+            if org_id:
+                self.org_id = org_id
+            if agent_id:
+                self.agent_id = agent_id
+            if customer_id:
+                self.customer_id = customer_id
+
+            guardrail_verdict = check_inbound(
+                message, ctx=self._guardrail_ctx,
+                surface=self._guardrail_surface, session_id=session_id)
+
+            with SessionLocal() as db:
+                chat_repo = ChatRepository(db)
+                self.agent.session_id = session_id
+                user_msg = chat_repo.create_message({
+                    "message": message,
+                    "message_type": "user",
+                    "session_id": session_id,
+                    "organization_id": org_id,
+                    "agent_id": agent_id,
+                    "customer_id": customer_id,
+                    "attributes": {**(user_attributes or {}), **guardrail_verdict.as_attributes()}
+                })
+                if attachments:
+                    self._attach_files_to_message(db, user_msg.id, attachments,
+                                                  org_id, customer_id)
+
+                if guardrail_verdict.block:
+                    blocked = ChatResponse(
+                        message=guardrail_verdict.reply, transfer_to_human=False,
+                        transfer_reason=None, transfer_description=None,
+                        end_chat=False, end_chat_reason=None,
+                        end_chat_description=None, request_rating=False,
+                        create_ticket=False, shopify_output=None)
+                    self._store_bot_message(chat_repo, {
+                        "message": guardrail_verdict.reply,
+                        "message_type": "bot", "session_id": session_id,
+                        "organization_id": org_id, "agent_id": agent_id,
+                        "customer_id": customer_id,
+                        "attributes": {**guardrail_verdict.as_attributes(),
+                                       "source": MessageSource.SYSTEM.value}
+                    })
+                    self.last_stream_response = blocked
+                    yield {"type": "start", "source": "model-full",
+                           "session_id": session_id, "message_id": self.last_bot_message_id}
+                    yield {"type": "token", "delta": guardrail_verdict.reply,
+                           "source": "model-full"}
+                    yield {"type": "done", "source": "model-full",
+                           "session_id": session_id, "message_id": self.last_bot_message_id}
+                    return
+
+                history_text = await self._compact_history(chat_repo, session_id)
+                if self.knowledge_tool is not None:
+                    self.knowledge_tool.reset_turn()
+                release_connection(db)
+                self._groq_json_capture.clear()
+                run_message = model_message or message
+
+                # --- KB instant answer (no model call) ---
+                kb_hit = None
+                if not force_model and not images and not attachments:
+                    kb_hit = await find_kb_candidate(agent_id, org_id, message)
+                if kb_hit is not None and (
+                        len(kb_hit.matched_keywords) >= 2 or kb_hit.confidence >= 0.5):
+                    response_content = self._kb_chat_response(
+                        kb_hit.answer, kb_hit.source_name, kb_hit.source_type)
+                    response_content.message, _ = check_output(
+                        response_content.message, ctx=self._guardrail_ctx,
+                        surface=self._guardrail_surface, session_id=session_id)
+                    response_content = ensure_nonempty_message(response_content)
+                    attributes = {
+                        "transfer_to_human": False, "transfer_reason": None,
+                        "transfer_description": None, "end_chat": False,
+                        "end_chat_reason": None, "end_chat_description": None,
+                        "request_rating": False, "shopify_output": None,
+                        "sources": [s.model_dump() for s in response_content.sources],
+                        "source": "kb",
+                    }
+                    self._store_bot_message(chat_repo, {
+                        "message": response_content.message, "message_type": "bot",
+                        "session_id": session_id, "organization_id": org_id,
+                        "agent_id": agent_id, "customer_id": customer_id,
+                        "attributes": attributes,
+                    })
+                    self.last_stream_response = response_content
+                    yield {"type": "start", "source": "kb", "session_id": session_id,
+                           "message_id": self.last_bot_message_id}
+                    yield {"type": "token", "delta": response_content.message,
+                           "source": "kb"}
+                    yield {"type": "done", "source": "kb", "session_id": session_id,
+                           "message_id": self.last_bot_message_id}
+                    return
+
+                # A near-miss KB article still grounds the lean model: paste
+                # it as context instead of paying for a tool round-trip.
+                # Needs >= 2 matched keywords, not just confidence: a lone
+                # shared word (e.g. "cancel" in a flight-booking question)
+                # once pasted the subscription-cancellation article as
+                # context and the model answered the flight question with
+                # subscription steps.
+                kb_context = None
+                if kb_hit is not None and kb_hit.confidence >= 0.25 \
+                        and len(kb_hit.matched_keywords) >= 2:
+                    kb_context = kb_hit.answer[:800]
+                    if self.knowledge_tool is not None:
+                        self.knowledge_tool.collected_sources = [
+                            {"name": kb_hit.source_name, "type": kb_hit.source_type}]
+
+                # --- Lean streaming turn ---
+                if self._stream_eligible(message, images, attachments):
+                    full_text = ""
+                    yielded_any = False
+                    started = False
+                    try:
+                        async for delta in self._lean_stream_tokens(
+                                run_message, session_id, history_text, kb_context):
+                            if not started:
+                                # Start only on the first real token: a stream
+                                # that fails before producing anything falls
+                                # back silently, with no start event emitted.
+                                started = True
+                                yield {"type": "start", "source": "model-stream",
+                                       "session_id": session_id, "message_id": None}
+                            full_text += delta
+                            yielded_any = True
+                            yield {"type": "token", "delta": delta,
+                                   "source": "model-stream"}
+                    except Exception as stream_err:
+                        logger.warning(
+                            f"Lean stream failed after {len(full_text)} chars "
+                            f"(session {session_id}): {stream_err}")
+                        if yielded_any and full_text.strip():
+                            # Keep the partial text: finish + store it, tell
+                            # the client the stream errored, and let the
+                            # normal chat_response carry the finished reply.
+                            response_content = await self._finish_turn(
+                                SimpleNamespace(content=full_text), None,
+                                session_id, org_id, agent_id, customer_id, db, chat_repo)
+                            self.last_stream_response = response_content
+                            yield {"type": "error", "session_id": session_id,
+                                   "error": f"Streaming interrupted: {stream_err}"}
+                            return
+                        # Nothing streamed yet: fall through to the full turn.
+                        logger.info("Lean stream produced nothing; "
+                                    "falling back to the full agent turn")
+                    else:
+                        if full_text.strip():
+                            response_content = await self._finish_turn(
+                                SimpleNamespace(content=full_text), None,
+                                session_id, org_id, agent_id, customer_id, db, chat_repo)
+                            self.last_stream_response = response_content
+                            yield {"type": "done", "source": "model-stream",
+                                   "session_id": session_id,
+                                   "message_id": self.last_bot_message_id}
+                            return
+                        logger.info("Lean stream empty; falling back to the full agent turn")
+
+                # --- Full non-streaming turn (fallback / ineligible) ---
+                _salvaged_content = None
+                try:
+                    response = await self._arun(run_message, session_id, images=images)
+                except asyncio.TimeoutError:
+                    raise
+                except Exception as arun_exc:
+                    if images and _is_vision_unsupported_error(arun_exc):
+                        try:
+                            response = await self._arun(
+                                run_message + _VISION_FALLBACK_NOTE, session_id)
+                        except Exception:
+                            raise arun_exc
+                    else:
+                        salvaged = _salvage_groq_json_error(arun_exc) \
+                            if self._use_groq_json_tool else None
+                        if not salvaged:
+                            raise
+                        _salvaged_content = _build_chat_response_from_capture(
+                            salvaged, self._response_model)
+                        response = None
+                paused = paused_turn(response)
+                if paused is not None:
+                    self.last_paused_turn = paused
+                    yield {"type": "done", "source": "model-full",
+                           "session_id": session_id, "paused": True}
+                    return
+                response_content = await self._finish_turn(
+                    response, _salvaged_content, session_id, org_id,
+                    agent_id, customer_id, db, chat_repo)
+                self.last_stream_response = response_content
+                yield {"type": "start", "source": "model-full",
+                       "session_id": session_id, "message_id": self.last_bot_message_id}
+                yield {"type": "done", "source": "model-full",
+                       "session_id": session_id, "message_id": self.last_bot_message_id}
+        except Exception as e:
+            logger.error(f"Streaming turn failed (session {session_id}): {e}")
+            yield {"type": "error", "session_id": session_id, "error": str(e)}
 
     async def _finish_turn(self, response, _salvaged_content, session_id: str, org_id: str, agent_id: str,
                            customer_id: str, db, chat_repo: ChatRepository) -> ChatResponse:

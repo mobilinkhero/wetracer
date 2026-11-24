@@ -131,6 +131,14 @@ const attachments = computed<Attachment[]>(() => props.message.attachments ?? []
                 :alt="attachment.filename"
                 class="attachment-image"
               />
+              <audio
+                v-else-if="attachment.content_type.startsWith('audio/')"
+                controls
+                preload="metadata"
+                class="attachment-audio"
+                :src="downloadUrl(attachment.file_url)"
+                :aria-label="attachment.filename"
+              ></audio>
               <a :href="downloadUrl(attachment.file_url)" target="_blank" rel="noopener" class="attachment-link">
                 {{ attachment.filename }}
                 <span class="attachment-size">({{ fileSize(attachment.file_size) }})</span>
@@ -346,6 +354,14 @@ const attachments = computed<Attachment[]>(() => props.message.attachments ?? []
   max-width: 240px;
   max-height: 200px;
   border-radius: 8px;
+  margin-bottom: 4px;
+}
+
+.attachment-audio {
+  display: block;
+  width: 100%;
+  max-width: 260px;
+  height: 36px;
   margin-bottom: 4px;
 }
 

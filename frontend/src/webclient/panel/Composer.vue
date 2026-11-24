@@ -27,6 +27,7 @@ import { WIDGET_CTX } from './controller'
 import { PANEL_COPY } from '../copy'
 import { SECRET_WARNING } from '../../utils/secretGuard'
 import { carriesFiles, growToFit, isSendKey, refitOnWidthChange } from './composer-input'
+import { useVoiceRecorder } from '../../composables/useVoiceRecorder'
 import StagedFiles from './StagedFiles.vue'
 
 const ctrl = inject(WIDGET_CTX)!
@@ -34,6 +35,16 @@ const {
     newMessage, placeholderText, canTypeMessage, secretInMessage, isRevealing,
     canUploadMore, isUploading, uploadedAttachments, acceptTypes,
 } = ctrl
+
+// Voice notes: recorded in the browser, then staged exactly like a picked file
+// (base64 content, same 3-file limit, same send path).
+const voice = useVoiceRecorder({
+    onRecorded: (file) => { void ctrl.uploadFiles([file]) },
+})
+// Template bindings only auto-unwrap top-level refs, not refs nested in the
+// recorder object — pull the template's flags out here.
+const { isRecording, isSupported: voiceSupported, error: voiceError } = voice
+const recordingTime = computed(() => ctrl.formatDuration(voice.elapsedSeconds.value))
 
 const field = ref<HTMLTextAreaElement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -96,6 +107,22 @@ defineExpose({ focus })
 <template>
     <div class="cm-composer-wrap">
         <StagedFiles />
+        <div v-if="isRecording" class="cm-recording" role="status">
+            <span class="cm-recording__dot" aria-hidden="true"></span>
+            <span class="cm-recording__label">{{ PANEL_COPY.recordingVoice }} · {{ recordingTime }}</span>
+            <button
+                type="button"
+                class="cm-recording__btn"
+                :aria-label="PANEL_COPY.stopRecording"
+                @click="voice.stop"
+            >{{ PANEL_COPY.stopRecording }}</button>
+            <button
+                type="button"
+                class="cm-recording__btn cm-recording__btn--ghost"
+                :aria-label="PANEL_COPY.cancelRecording"
+                @click="voice.cancel"
+            >{{ PANEL_COPY.cancelRecording }}</button>
+        </div>
         <div class="cm-composer" :class="{ 'is-disabled': !canTypeMessage }">
             <input
                 ref="fileInput"
@@ -117,6 +144,17 @@ defineExpose({ focus })
                 @click="openFilePicker"
             >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5 5 0 01-7.1-7.1l8.6-8.6a3.5 3.5 0 015 5l-8.6 8.6a2 2 0 01-2.8-2.8L15.4 7.3"></path></svg>
+            </button>
+            <button
+                v-if="canUploadMore && voiceSupported && !isRecording"
+                type="button"
+                class="cm-icon-button cm-press"
+                :aria-label="PANEL_COPY.recordVoice"
+                :title="PANEL_COPY.recordVoice"
+                :disabled="isUploading"
+                @click="voice.start"
+            >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"></path><path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"></path></svg>
             </button>
             <textarea
                 ref="field"
@@ -146,6 +184,7 @@ defineExpose({ focus })
             </button>
         </div>
         <p v-if="isUploading" class="cm-composer-note" role="status">{{ PANEL_COPY.uploading }}</p>
+        <p v-if="voiceError" class="cm-composer-note" role="alert">{{ voiceError }}</p>
         <p v-if="secretInMessage" class="cm-secret-hint" role="alert">{{ SECRET_WARNING }}</p>
     </div>
 </template>
@@ -183,4 +222,11 @@ defineExpose({ focus })
     justify-content: center;
 }
 .cm-send__stop { position: absolute; width: 11px; height: 11px; }
+/* Voice-note recording row: red dot, timer, Stop / Cancel. */
+.cm-recording { display: flex; align-items: center; gap: 8px; padding: 6px 8px; margin-bottom: 6px; }
+.cm-recording__dot { width: 10px; height: 10px; flex-shrink: 0; border-radius: 50%; background: #d92d20; animation: cm-recording-pulse 1.2s ease-in-out infinite; }
+@keyframes cm-recording-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.cm-recording__label { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cm-recording__btn { flex-shrink: 0; padding: 4px 10px; border-radius: 999px; border: 1px solid currentColor; background: none; font: inherit; cursor: pointer; }
+.cm-recording__btn--ghost { opacity: 0.75; }
 </style>

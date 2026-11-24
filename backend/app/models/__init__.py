@@ -18,6 +18,14 @@ from app.database import Base
 from .organization import Organization
 from .user import User
 from .fcm_token import FCMToken
+from .mobile import (
+    BlockedVisitor,
+    MobileAbuseEvent,
+    MobileDeviceToken,
+    MobileFcmConfig,
+    MobileWidgetSecurity,
+    PushAttempt,
+)
 from .auth_session import AuthSession
 from .user_identity import UserIdentity
 from .customer import Customer
@@ -84,6 +92,12 @@ __all__ = [
     "Organization",
     "User",
     "FCMToken",
+    "MobileDeviceToken",
+    "MobileFcmConfig",
+    "BlockedVisitor",
+    "MobileWidgetSecurity",
+    "MobileAbuseEvent",
+    "PushAttempt",
     "AuthSession",
     "UserIdentity",
     "Customer",

@@ -23,6 +23,7 @@ from uuid import uuid4
 
 from app.services.file_upload_service import (
     FileUploadService,
+    ALLOWED_AUDIO_TYPES,
     ALLOWED_IMAGE_TYPES,
     ALLOWED_DOCUMENT_TYPES,
     ALLOWED_FILE_TYPES,
@@ -38,6 +39,27 @@ class TestFileUploadServiceValidation:
         """Test validation of allowed image types"""
         for content_type in ALLOWED_IMAGE_TYPES:
             assert FileUploadService.validate_file_type(content_type) is True
+
+    def test_validate_file_type_allowed_audio(self):
+        """Voice notes (webm/mp4/m4a/ogg/wav/mp3) are allowed uploads"""
+        for content_type in ALLOWED_AUDIO_TYPES:
+            assert FileUploadService.validate_file_type(content_type) is True
+
+    def test_validate_audio_skips_magic_bytes(self):
+        """Audio has no reliable magic bytes, so any bytes pass the check"""
+        is_valid, error = FileUploadService.validate_magic_bytes(
+            b"\x1a\x45\xdf\xa3" + b"\x00" * 100, "audio/webm")
+        assert is_valid is True
+        assert error is None
+
+    def test_validate_audio_size_limit_10mb(self):
+        """Audio is capped at 10MB (the general file limit, not the 5MB image cap)"""
+        assert FileUploadService.validate_file_size(10 * 1024 * 1024, "audio/webm")[0] is True
+        assert FileUploadService.validate_file_size(10 * 1024 * 1024 + 1, "audio/webm")[0] is False
+
+    def test_audio_category(self):
+        """Agents can allow audio via the 'audio' attachment category"""
+        assert FileUploadService.get_allowed_types_for_agent(["audio"]) == ALLOWED_AUDIO_TYPES
     
     def test_validate_file_type_allowed_document(self):
         """Test validation of allowed document types"""
@@ -261,9 +283,10 @@ class TestFileUploadServiceUpload:
     @pytest.mark.asyncio
     async def test_upload_file_invalid_type(self, sample_file_data):
         """Test upload with invalid file type"""
-        # Modify to invalid type
-        sample_file_data['content_type'] = 'video/mp4'
-        sample_file_data['filename'] = 'test.mp4'
+        # Modify to invalid type (.exe is not an allowed extension; note
+        # .mp4 is now valid as an audio note, so it no longer serves here)
+        sample_file_data['content_type'] = 'application/x-msdownload'
+        sample_file_data['filename'] = 'test.exe'
         
         with pytest.raises(ValueError) as exc_info:
             await FileUploadService.upload_file(
@@ -479,7 +502,7 @@ class TestFileUploadServiceConstants:
     
     def test_allowed_file_types_combination(self):
         """Test that ALLOWED_FILE_TYPES is correct combination"""
-        expected_types = ALLOWED_IMAGE_TYPES | ALLOWED_DOCUMENT_TYPES
+        expected_types = ALLOWED_IMAGE_TYPES | ALLOWED_DOCUMENT_TYPES | ALLOWED_AUDIO_TYPES
         assert ALLOWED_FILE_TYPES == expected_types
     
     def test_file_size_constants(self):

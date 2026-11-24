@@ -32,7 +32,7 @@ const templateOf = (source: string) =>
     source.slice(source.indexOf('<template>'), source.lastIndexOf('</template>'))
 
 /**
- * "Powered by ChatterMate" comes off only when the server says the plan removes
+ * "Powered by WeTracer" comes off only when the server says the plan removes
  * it. A page with no answer, such as an older bootstrap, keeps it.
  */
 
@@ -56,9 +56,9 @@ describe('the widget footer', () => {
         resetSocket()
     })
 
-    // The "Powered by ChatterMate" link, by where it goes and what it says.
+    // The "Powered by WeTracer" link, by where it goes and what it says.
     const brandLink = () => wrapper.findAll('a[href="https://chattermate.chat"]')
-        .find((link: any) => link.text().replace(/\s+/g, ' ').includes('Powered by ChatterMate'))
+        .find((link: any) => link.text().replace(/\s+/g, ' ').includes('Powered by WeTracer'))
 
     it('keeps the branding by default', async () => {
         await mountWith(undefined)
