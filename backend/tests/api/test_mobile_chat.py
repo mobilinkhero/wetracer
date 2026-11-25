@@ -151,6 +151,25 @@ def fake_ai(db):
         yield
 
 
+WELCOME_TEXT = "Hi! I can track orders or start a return — pick one."
+
+
+def _set_welcome(db, test_agent, welcome):
+    """Give the agent a customization row carrying this welcome message."""
+    from app.models.agent import AgentCustomization
+    db.add(AgentCustomization(agent_id=test_agent.id, welcome_message=welcome))
+    db.commit()
+
+
+def _send_first_mobile_message(client, conv):
+    token = conv["conversation_token"]
+    resp = client.post(
+        f"/api/v1/mobile/conversations/{conv['conversation_id']}/messages",
+        headers=_headers(token), data={"message": "Hello from the app"})
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
 # --- 1. Start / resume -------------------------------------------------------
 
 def test_start_conversation_creates_and_resumes(client, test_widget, test_ai_config):
@@ -212,6 +231,114 @@ def test_send_text_runs_ai_turn_and_polls_back(client, test_widget, test_ai_conf
         f"/api/v1/mobile/conversations/{conv['conversation_id']}/messages",
         params={"after": history[0]["id"]}, headers=_headers(token)).json()["messages"]
     assert [m["id"] for m in after] == [history[1]["id"]]
+
+
+# --- 2b. Welcome message (mirrors the widget socket handler) -----------------
+
+@pytest.mark.asyncio
+async def test_first_message_inserts_welcome_message_for_mobile(
+        client, db, test_widget, test_agent, test_ai_config, fake_ai):
+    """The welcome message is stored as the conversation's first message, so
+    the AI's history starts with what the visitor is picking from — and the
+    app sees it in the history it polls back."""
+    from app.api.widget_chat import WELCOME_MESSAGE_ATTRIBUTE
+
+    _set_welcome(db, test_agent, WELCOME_TEXT)
+    conv = _start(client, test_widget)
+    body = _send_first_mobile_message(client, conv)
+    assert body["ai_reply_pending"] is True
+
+    history = client.get(
+        f"/api/v1/mobile/conversations/{conv['conversation_id']}/messages",
+        headers=_headers(conv["conversation_token"])).json()["messages"]
+    assert [m["text"] for m in history] == [
+        WELCOME_TEXT, "Hello from the app", "Fake AI reply"]
+    assert [m["sender"] for m in history] == ["ai", "visitor", "ai"]
+
+    stored = await ChatRepository(db).get_session_history(conv["conversation_id"])
+    assert len(stored) == 3
+    assert stored[0].message == WELCOME_TEXT
+    assert stored[0].message_type == "bot"
+    assert stored[0].attributes.get(WELCOME_MESSAGE_ATTRIBUTE) is True
+    assert stored[0].attributes.get("source") == "system"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("welcome", [None, "", "   "])
+async def test_first_message_without_welcome_message_works_as_before(
+        client, db, test_widget, test_agent, test_ai_config, fake_ai, welcome):
+    """No welcome message set (missing, null, empty, whitespace-only): the
+    insertion is skipped cleanly and the chat works exactly as before — a
+    normal first reply, nothing extra stored."""
+    from app.api.widget_chat import WELCOME_MESSAGE_ATTRIBUTE
+
+    _set_welcome(db, test_agent, welcome)
+    conv = _start(client, test_widget)
+    body = _send_first_mobile_message(client, conv)
+    assert body["ai_reply_pending"] is True
+
+    history = client.get(
+        f"/api/v1/mobile/conversations/{conv['conversation_id']}/messages",
+        headers=_headers(conv["conversation_token"])).json()["messages"]
+    assert [m["sender"] for m in history] == ["visitor", "ai"]
+    assert history[1]["text"] == "Fake AI reply"
+    stored = await ChatRepository(db).get_session_history(conv["conversation_id"])
+    assert not [m for m in stored
+                if (m.attributes or {}).get(WELCOME_MESSAGE_ATTRIBUTE) is True]
+
+
+@pytest.mark.asyncio
+async def test_first_message_without_customization_row_works_as_before(
+        client, db, test_widget, test_agent, test_ai_config, fake_ai):
+    """No customization row at all on the agent: same as above — the send
+    must not trip over the missing row."""
+    from app.repositories.agent import AgentRepository
+    from app.api.widget_chat import WELCOME_MESSAGE_ATTRIBUTE
+
+    assert AgentRepository(db).get_agent(test_agent.id).customization is None
+    conv = _start(client, test_widget)
+    body = _send_first_mobile_message(client, conv)
+    assert body["ai_reply_pending"] is True
+
+    history = client.get(
+        f"/api/v1/mobile/conversations/{conv['conversation_id']}/messages",
+        headers=_headers(conv["conversation_token"])).json()["messages"]
+    assert [m["sender"] for m in history] == ["visitor", "ai"]
+    stored = await ChatRepository(db).get_session_history(conv["conversation_id"])
+    assert not [m for m in stored
+                if (m.attributes or {}).get(WELCOME_MESSAGE_ATTRIBUTE) is True]
+
+
+@pytest.mark.asyncio
+async def test_welcome_message_is_inserted_only_once(
+        client, db, test_widget, test_agent, test_ai_config, fake_ai):
+    """A retried first turn and every later turn must not store the welcome
+    again — the seeded welcome stays the only one."""
+    from app.api.widget_chat import WELCOME_MESSAGE_ATTRIBUTE, _insert_welcome_message
+
+    _set_welcome(db, test_agent, WELCOME_TEXT)
+    conv = _start(client, test_widget)
+    token = conv["conversation_token"]
+    _send_first_mobile_message(client, conv)
+
+    # The flag guard: a second insert attempt for the same session is a no-op.
+    stored = await ChatRepository(db).get_session_history(conv["conversation_id"])
+    assert _insert_welcome_message(
+        db, conv["conversation_id"], test_widget.organization_id,
+        test_widget.agent_id, stored[0].customer_id) is False
+    stored = await ChatRepository(db).get_session_history(conv["conversation_id"])
+    assert len([m for m in stored
+                if (m.attributes or {}).get(WELCOME_MESSAGE_ATTRIBUTE) is True]) == 1
+
+    # A later turn stores nothing either.
+    resp = client.post(
+        f"/api/v1/mobile/conversations/{conv['conversation_id']}/messages",
+        headers=_headers(token), data={"message": "And the return?"})
+    assert resp.status_code == 200, resp.text
+    stored = await ChatRepository(db).get_session_history(conv["conversation_id"])
+    assert len([m for m in stored
+                if (m.attributes or {}).get(WELCOME_MESSAGE_ATTRIBUTE) is True]) == 1
+    assert stored[0].message == WELCOME_TEXT
 
 
 def test_send_empty_message_422(client, test_widget, test_ai_config):

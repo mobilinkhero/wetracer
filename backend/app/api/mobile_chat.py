@@ -63,7 +63,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.chat_agent import ChatResponse
 from app.agents.host_actions.turns import PausedTurn
-from app.api.widget_chat import _client_attachments, _media_inputs
+from app.api.widget_chat import _client_attachments, _insert_welcome_message, _media_inputs
 from app.channels.constants import MessageSource
 from app.core.logger import get_logger
 from app.core.security import (
@@ -760,6 +760,14 @@ async def send_message(
     if is_first_customer_message:
         await notify_new_chat(db, session)
 
+    # The agent's welcome message is what the visitor is picking from, so
+    # the AI needs it in the history before this first message is stored by
+    # the branch below — whichever branch that is. Only on the first
+    # message, only when one is set; the helper no-ops otherwise. Same call
+    # as the widget socket handler.
+    if is_first_customer_message:
+        _insert_welcome_message(db, session_id, org_id, session.agent_id, customer_id)
+
     # Who stores the visitor message? NOT the AI/workflow branches:
     # ChatAgent.get_response and WorkflowChatService both store the user
     # message themselves (with the attachments) — pre-storing it here would
@@ -993,6 +1001,14 @@ async def send_message_stream(
         await notify_new_chat(db, session)
     if waiting_on_page(db, session_id):
         raise HTTPException(status_code=409, detail="Still waiting for the app to finish the last step.")
+
+    # Same as the non-streaming endpoint: the stream builds its history
+    # from what is stored, so the welcome must be in place before the
+    # generator runs — it runs after this handler returns, on a fresh db
+    # session — and only for a turn that actually goes through (the guards
+    # above have all passed by here).
+    if is_first_customer_message:
+        _insert_welcome_message(db, session_id, org_id, session.agent_id, customer_id)
 
     session_dict = _mobile_session_dict(session, agent, ai_config, token, scope,
                                         payload.get("widget_id"))

@@ -246,6 +246,86 @@ def test_sse_model_stream_token_order(stream_client, test_widget, test_ai_config
     assert history[1]["text"] == "Hello streamed world"
 
 
+# --- SSE: welcome message (mirrors the widget socket handler) -----------------
+
+WELCOME_TEXT = "Hi! I can track orders or start a return — pick one."
+
+
+def _set_welcome(db, test_agent, welcome):
+    """Give the agent a customization row carrying this welcome message."""
+    from app.models.agent import AgentCustomization
+    db.add(AgentCustomization(agent_id=test_agent.id, welcome_message=welcome))
+    db.commit()
+
+
+def _stream_events(conv):
+    return [
+        {"type": "start", "source": "model-stream", "session_id": conv["conversation_id"],
+         "message_id": None},
+        {"type": "token", "delta": "Hello ", "source": "model-stream"},
+        {"type": "token", "delta": "streamed ", "source": "model-stream"},
+        {"type": "token", "delta": "world", "source": "model-stream"},
+        {"type": "done", "source": "model-stream", "session_id": conv["conversation_id"],
+         "message_id": None},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sse_first_message_inserts_welcome_message(
+        stream_client, db, test_widget, test_agent, test_ai_config, fake_stream):
+    """The streamed first turn stores the welcome message too, ahead of the
+    visitor message the stream stores — the AI's history starts with what
+    the visitor is picking from, on both send endpoints."""
+    from app.api.widget_chat import WELCOME_MESSAGE_ATTRIBUTE
+
+    _set_welcome(db, test_agent, WELCOME_TEXT)
+    conv = _start(stream_client, test_widget)
+    fake_stream["install"](_stream_events(conv), "Hello streamed world")
+
+    events = _stream(stream_client, conv, "Say hello")
+    assert [name for name, _ in events] == ["start", "token", "token", "token", "done"]
+    assert events[-1][1]["message"] == "Hello streamed world"
+
+    history = stream_client.get(
+        f"/api/v1/mobile/conversations/{conv['conversation_id']}/messages",
+        headers=_headers(conv["conversation_token"])).json()["messages"]
+    assert [m["text"] for m in history] == [
+        WELCOME_TEXT, "Say hello", "Hello streamed world"]
+    assert [m["sender"] for m in history] == ["ai", "visitor", "ai"]
+
+    stored = await ChatRepository(db).get_session_history(conv["conversation_id"])
+    assert len(stored) == 3
+    assert stored[0].message == WELCOME_TEXT
+    assert stored[0].message_type == "bot"
+    assert stored[0].attributes.get(WELCOME_MESSAGE_ATTRIBUTE) is True
+    assert stored[0].attributes.get("source") == "system"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("welcome", [None, "", "   "])
+async def test_sse_first_message_without_welcome_message_works_as_before(
+        stream_client, db, test_widget, test_agent, test_ai_config, fake_stream, welcome):
+    """No welcome message set: the streamed turn works exactly as before —
+    a normal streamed reply, nothing extra stored."""
+    from app.api.widget_chat import WELCOME_MESSAGE_ATTRIBUTE
+
+    _set_welcome(db, test_agent, welcome)
+    conv = _start(stream_client, test_widget)
+    fake_stream["install"](_stream_events(conv), "Hello streamed world")
+
+    events = _stream(stream_client, conv, "Say hello")
+    assert [name for name, _ in events] == ["start", "token", "token", "token", "done"]
+    assert events[-1][1]["message"] == "Hello streamed world"
+
+    history = stream_client.get(
+        f"/api/v1/mobile/conversations/{conv['conversation_id']}/messages",
+        headers=_headers(conv["conversation_token"])).json()["messages"]
+    assert [m["sender"] for m in history] == ["visitor", "ai"]
+    stored = await ChatRepository(db).get_session_history(conv["conversation_id"])
+    assert not [m for m in stored
+                if (m.attributes or {}).get(WELCOME_MESSAGE_ATTRIBUTE) is True]
+
+
 def test_sse_model_full_fallback_has_no_tokens(stream_client, test_widget, test_ai_config, fake_stream):
     """A turn the lean agent cannot take: single start (model-full), no
     tokens, then done with the complete reply. A client that only handles
