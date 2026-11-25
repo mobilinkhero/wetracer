@@ -132,6 +132,87 @@ class FirstPartyCredentialsCORSMiddleware(CORSMiddleware):
         await super().send(message, without_credentials, request_headers)
 
 
+# Paths whose callers are browser-based visitors, not the dashboard: the public
+# mobile API and the public widget API. Their auth is a public widget ID plus
+# a per-conversation bearer-style token — nothing ambient like a cookie — so
+# any origin may call them, including the Flutter web build on an arbitrary
+# origin and a widget embedded on any customer site. Admin routes (anything
+# under {API_V1_STR}/admin) and every other dashboard route stay on the
+# origin-list middleware above and never get the wildcard: they authenticate
+# with the dashboard's sign-in cookie, and a wildcard there would let any
+# site read a signed-in user's account.
+PUBLIC_CORS_PREFIXES: tuple = (
+    f"{settings.API_V1_STR}/mobile",
+    f"{settings.API_V1_STR}/widgets",
+)
+PUBLIC_CORS_ALLOW_METHODS = "GET, POST, PUT, DELETE, OPTIONS"
+PUBLIC_CORS_ALLOW_HEADERS = (
+    "Content-Type, Authorization, X-Conversation-Token, X-Device-Id, X-App-Version"
+)
+
+
+class PublicApiCORSMiddleware:
+    """Wildcard CORS, but only for the public visitor API.
+
+    The web widget is embedded on arbitrary customer sites and the Flutter
+    web build runs on any origin, so the public mobile/widget API must answer
+    cross-origin with no proxy: Access-Control-Allow-Origin: * on every
+    response, and a 200 preflight carrying the allowed methods and headers.
+
+    Registered OUTERMOST (added after the origin-list middleware in main.py),
+    so it runs first: preflights on public paths are answered here and never
+    reach the inner middleware, and on real responses any ACAO/ACAC the inner
+    middleware set is replaced with the single wildcard — a browser rejects a
+    response carrying two Access-Control-Allow-Origin headers, and
+    Access-Control-Allow-Origin: * must never travel with credentials.
+    """
+
+    def __init__(self, app, prefixes=PUBLIC_CORS_PREFIXES):
+        self.app = app
+        self.prefixes = tuple(prefixes)
+
+    def _is_public(self, path: str) -> bool:
+        return any(path == p or path.startswith(p + "/") for p in self.prefixes)
+
+    def _preflight_headers(self):
+        return [
+            (b"access-control-allow-origin", b"*"),
+            (b"access-control-allow-methods", PUBLIC_CORS_ALLOW_METHODS.encode()),
+            (b"access-control-allow-headers", PUBLIC_CORS_ALLOW_HEADERS.encode()),
+            (b"access-control-max-age", b"86400"),
+        ]
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not self._is_public(scope.get("path", "")):
+            await self.app(scope, receive, send)
+            return
+        if scope["method"] == "OPTIONS":
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": self._preflight_headers(),
+                }
+            )
+            await send({"type": "http.response.body", "body": b""})
+            return
+        origin = dict(scope.get("headers", [])).get(b"origin")
+        if not origin:
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_wildcard(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name in ("access-control-allow-origin", "access-control-allow-credentials"):
+                    if name in headers:
+                        del headers[name]
+                headers["access-control-allow-origin"] = "*"
+            await send(message)
+
+        await self.app(scope, receive, send_with_wildcard)
+
+
 @lru_cache(maxsize=1)
 def get_cors_origins() -> Set[str]:
     """

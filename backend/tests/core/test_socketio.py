@@ -168,11 +168,26 @@ class TestSocketOriginPolicy:
         assert not policy("https://api.example.com")
 
     def test_engineio_uses_it_for_the_handshake(self, monkeypatch):
+        # The public widget is embedded on arbitrary sites, so the transport
+        # handshake allows any origin; the cookie-authenticated /agent
+        # namespace still refuses other sites itself (cookie_socket_allowed).
         environ = {"HTTP_ORIGIN": "https://evil.example", "HTTP_HOST": "api.example.com"}
-        assert sio.eio._cors_allowed_origins(environ) == []
+        assert sio.eio._cors_allowed_origins(environ) == ["https://evil.example"]
 
         environ = {"HTTP_ORIGIN": "https://api.example.com", "HTTP_HOST": "api.example.com"}
         assert sio.eio._cors_allowed_origins(environ) == ["https://api.example.com"]
+
+    def test_allow_any_survives_a_cors_refresh(self, monkeypatch):
+        # A refresh swaps the origin list, never the allow-any flag.
+        from app.core import cors
+        from fastapi import FastAPI
+
+        monkeypatch.setattr(socket_origins, "origins", socket_origins.origins)
+        monkeypatch.setattr(socket_origins, "allow_any", socket_origins.allow_any)
+        cors.update_local_cors(FastAPI(), ["https://only.example"])
+
+        assert socket_origins.allow_any is True
+        assert socket_origins("https://anywhere.example", {"HTTP_HOST": "api.example.com"})
 
     def test_own_host_still_allowed_after_a_cors_refresh(self, monkeypatch):
         from fastapi import FastAPI

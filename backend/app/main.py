@@ -53,6 +53,7 @@ from app.core.socketio import socket_app, configure_socketio, sio
 from app.core.cors import (
     EXPOSED_HEADERS,
     FirstPartyCredentialsCORSMiddleware,
+    PublicApiCORSMiddleware,
     first_party_origins,
     get_cors_origin_regex,
     get_cors_origins,
@@ -110,6 +111,13 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=EXPOSED_HEADERS,
 )
+
+# Wildcard CORS for the public visitor API only (mobile + widgets): the web
+# widget is embedded on arbitrary sites and the Flutter web build runs on any
+# origin, so they must reach the public API directly with no proxy. Admin and
+# dashboard routes are untouched — they stay on the origin-list middleware
+# above. Added after it, so this runs first (outermost).
+app.add_middleware(PublicApiCORSMiddleware)
 
 async def startup_event(api: FastAPI):
     """Configure Socket.IO on startup. Called from lifespan() with the FastAPI

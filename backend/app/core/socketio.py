@@ -53,15 +53,28 @@ class SocketOriginPolicy:
     host to the API host would carry the dashboard's cookies, which is exactly
     what serving the frame elsewhere keeps out of the widget's reach.
     Installed once on the server; refreshes swap the list, never the policy.
+    The one exception is allow_any (below): the public widget is embedded on
+    arbitrary customer sites, so the /widget socket must connect from any
+    origin — and that only opens the transport handshake, since the
+    cookie-authenticated namespaces gate themselves.
     """
 
-    def __init__(self, origins=()):
+    def __init__(self, origins=(), allow_any=False):
         self.origins = frozenset(origins)
+        # The public widget is embedded on arbitrary customer sites, so its
+        # /widget socket must connect from any origin. allow_any only opens
+        # the transport handshake: the cookie-authenticated /agent namespace
+        # still refuses other sites itself (auth_utils.cookie_socket_allowed),
+        # and the widget namespaces carry no cookies. Refreshes swap the list
+        # (update), never this flag.
+        self.allow_any = allow_any
 
     def update(self, origins) -> None:
         self.origins = frozenset(origins)
 
     def __call__(self, origin, environ=None) -> bool:
+        if self.allow_any:
+            return True
         if not origin:
             return False
         # engineio's own list handling treats "*" as any origin; keep that
@@ -71,7 +84,7 @@ class SocketOriginPolicy:
         return bool(host) and host == (environ or {}).get("HTTP_HOST", "").lower()
 
 
-socket_origins = SocketOriginPolicy(get_cors_origins())
+socket_origins = SocketOriginPolicy(get_cors_origins(), allow_any=True)
 
 # Initialize Socket.IO server with basic config. engine.io answers every
 # allowed origin with credentials allowed; the cookie-authenticated /agent
