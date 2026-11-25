@@ -54,11 +54,11 @@ import datetime
 import json
 import uuid
 from types import SimpleNamespace
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.agents.chat_agent import ChatResponse
@@ -73,7 +73,7 @@ from app.core.security import (
 from app.core.socketio import sio
 from app.database import SessionLocal, get_db, release_connection
 from app.models import FileAttachment
-from app.models.mobile import MobileDeviceToken, PushAttempt
+from app.models.mobile import MobileDeviceToken, MobileReport, PushAttempt
 from app.models.session_to_agent import SessionStatus
 from app.models.widget import Widget
 from app.repositories.agent import AgentRepository
@@ -142,6 +142,17 @@ class StartConversationRequest(BaseModel):
 class RegisterDeviceRequest(BaseModel):
     push_token: str
     platform: str
+
+
+class ReportRequest(BaseModel):
+    # Which agent's AI content is being reported. Must be an existing widget;
+    # the widget ID is public, the same trust level as the widget itself.
+    widget_id: str
+    reason: Literal["Offensive content", "Wrong or misleading info",
+                    "Spam or scam", "Something else"]
+    details: Optional[str] = Field(default=None, max_length=1000)
+    # Where the report came from, e.g. 'widget' | 'mobile' | 'web'.
+    source: Optional[str] = Field(default=None, max_length=64)
 
 
 # --------------------------------------------------------------------------
@@ -1224,5 +1235,59 @@ async def list_push_attempts(
             for a in attempts
         ],
     }
+
+
+# --------------------------------------------------------------------------
+# 6. Report offensive AI content (Google Play AI-Generated Content policy)
+# --------------------------------------------------------------------------
+
+# Reports are low-frequency by nature, but the endpoint is public and
+# unauthenticated, so it still gets a per-IP sliding window. Fail-open
+# without Redis (sliding_window_allow allows), same as the message limits.
+REPORTS_PER_IP_PER_HOUR = 10
+
+
+@router.post("/reports")
+async def report_ai_content(
+    body: ReportRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """A visitor reports offensive AI content, without leaving the app.
+
+    Google Play's AI-Generated Content policy requires apps with generative
+    AI to offer in-app reporting of offensive AI content. Public, no login:
+    the widget ID is public, the same trust level as the widget itself, so
+    this takes no conversation token, no AI config and no admin auth — just
+    a widget that exists. Stored in mobile_reports; org admins read them
+    through GET /api/v1/admin/mobile/reports.
+    """
+    widget = db.query(Widget).filter(Widget.id == body.widget_id).first()
+    if not widget:
+        raise HTTPException(status_code=404, detail="Widget not found")
+    ip = mobile_security.client_ip(request)
+    allowed, retry_after = mobile_security.sliding_window_allow(
+        f"mobile:reports:ip:{ip}", REPORTS_PER_IP_PER_HOUR, 3600)
+    if not allowed:
+        mobile_security.record_abuse_event(
+            db, event_type="rate_limited", organization_id=widget.organization_id,
+            widget_id=widget.id, ip=ip,
+            detail=f"Too many AI-content reports from this address "
+                   f"({REPORTS_PER_IP_PER_HOUR}/hour)")
+        raise HTTPException(
+            status_code=429,
+            detail="Too many reports from this address; please try again later",
+            headers={"Retry-After": str(retry_after)})
+    row = MobileReport(
+        widget_id=widget.id,
+        organization_id=widget.organization_id,
+        reason=body.reason,
+        details=(body.details or "").strip() or None,
+        source=(body.source or "").strip() or None,
+        ip_address=ip,
+    )
+    db.add(row)
+    db.commit()
+    return {"received": True}
 
 

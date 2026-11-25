@@ -159,3 +159,36 @@ class MobileAbuseEvent(Base):
     event_type = Column(String(64), nullable=False)
     detail = Column(Text, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+# Reasons a visitor can pick when reporting AI content. Keep in sync with
+# the ReportRequest reason Literal in app/api/mobile_chat.py.
+REPORT_REASONS = (
+    "Offensive content",
+    "Wrong or misleading info",
+    "Spam or scam",
+    "Something else",
+)
+
+
+class MobileReport(Base):
+    """Visitor report of offensive AI content.
+
+    Google Play's AI-Generated Content policy requires apps with generative
+    AI to let users report or flag offensive AI content without leaving the
+    app — this table is where those reports land. Public, no login: the
+    widget ID is public, the same trust level as the widget itself, so the
+    endpoint (POST /api/v1/mobile/reports) takes no auth and no AI config.
+    Read by org admins through GET /api/v1/admin/mobile/reports.
+    """
+
+    __tablename__ = "mobile_reports"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    widget_id = Column(String, ForeignKey("widgets.id", ondelete="CASCADE"), nullable=False, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
+    reason = Column(String(64), nullable=False)  # one of REPORT_REASONS
+    details = Column(Text, nullable=True)  # free text, max 1000 chars at the API
+    source = Column(String(64), nullable=True)  # e.g. 'widget' | 'mobile' | 'web'
+    ip_address = Column(String(64), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

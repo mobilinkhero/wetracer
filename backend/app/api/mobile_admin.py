@@ -46,6 +46,7 @@ from app.models.mobile import (
     BlockedVisitor,
     MobileAbuseEvent,
     MobileFcmConfig,
+    MobileReport,
     MobileWidgetSecurity,
 )
 from app.models.widget import Widget
@@ -287,5 +288,38 @@ async def list_abuse_events(
          "session_id": str(r.session_id) if r.session_id else None,
          "ip_address": r.ip_address, "event_type": r.event_type,
          "detail": r.detail,
+         "created_at": r.created_at.isoformat() if r.created_at else None}
+        for r in rows]}
+
+
+# --------------------------------------------------------------------------
+# AI-content reports (Google Play AI-Generated Content policy)
+# --------------------------------------------------------------------------
+
+@router.get("/reports")
+async def list_reports(
+    widget_id: Optional[str] = Query(None),
+    reason: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Visitor reports of offensive AI content (POST /api/v1/mobile/reports),
+    org-scoped like the abuse log. The dashboard's safety view reads these
+    to act on user reports — the Play policy requires the reports to be
+    monitored and used to improve filtering, not just collected."""
+    query = db.query(MobileReport).filter(
+        MobileReport.organization_id == current_user.organization_id)
+    if widget_id:
+        _org_widget(db, widget_id, current_user.organization_id)
+        query = query.filter(MobileReport.widget_id == widget_id)
+    if reason:
+        query = query.filter(MobileReport.reason == reason)
+    rows = query.order_by(MobileReport.created_at.desc(),
+                          MobileReport.id.desc()).limit(limit).all()
+    return {"reports": [
+        {"id": str(r.id), "widget_id": str(r.widget_id),
+         "reason": r.reason, "details": r.details, "source": r.source,
+         "ip_address": r.ip_address,
          "created_at": r.created_at.isoformat() if r.created_at else None}
         for r in rows]}
