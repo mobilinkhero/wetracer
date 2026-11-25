@@ -76,6 +76,123 @@ def test_fcm_config_roundtrip_masked(client, db):
     assert bad.status_code == 422
 
 
+# Clearly fake key material for tests only — never a real credential.
+_FAKE_PRIVATE_KEY = (
+    "-----BEGIN PRIVATE KEY-----\n"
+    "FAKE-KEY-FOR-TESTS-ONLY-NOT-A-REAL-CREDENTIAL\n"
+    "-----END PRIVATE KEY-----\n"
+)
+
+
+def _fake_service_account(project_id="test-project"):
+    return {
+        "type": "service_account",
+        "project_id": project_id,
+        "private_key": _FAKE_PRIVATE_KEY,
+        "client_email": f"firebase-adminsdk-test@{project_id}.iam.gserviceaccount.com",
+        "client_id": "000000000000000000000",
+    }
+
+
+def test_fcm_config_get_before_save(client, db):
+    got = client.get("/api/v1/admin/mobile/fcm-config")
+    assert got.status_code == 200
+    assert got.json() == {"configured": False, "project_id": None, "updated_at": None}
+
+
+def test_fcm_config_post_valid_test_project_encrypted(client, db):
+    service_account = _fake_service_account("test-project")
+    resp = client.post("/api/v1/admin/mobile/fcm-config",
+                       json={"service_account_json": service_account})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"configured": True, "project_id": "test-project"}
+
+    # Stored encrypted at rest: the ciphertext is not the plaintext and it
+    # decrypts back to exactly what was submitted.
+    row = db.query(MobileFcmConfig).first()
+    assert row is not None
+    assert row.project_id == "test-project"
+    assert _FAKE_PRIVATE_KEY not in row.encrypted_service_account_json
+    assert json.loads(decrypt_api_key(row.encrypted_service_account_json)) == service_account
+
+    # GET after save: masked status only — the key never leaves the server.
+    got = client.get("/api/v1/admin/mobile/fcm-config")
+    assert got.status_code == 200
+    body = got.json()
+    assert set(body) == {"configured", "project_id", "updated_at"}
+    assert body["configured"] is True
+    assert body["project_id"] == "test-project"
+    assert body["updated_at"] is not None
+    assert "private_key" not in got.text
+    assert "FAKE-KEY-FOR-TESTS-ONLY" not in got.text
+    assert "service_account_json" not in got.text
+
+
+@pytest.mark.parametrize("bad_json,reason", [
+    ({"type": "service_account", "private_key": _FAKE_PRIVATE_KEY},
+     "missing project_id"),
+    ({"type": "service_account", "project_id": "test-project"},
+     "missing private_key"),
+    ({"type": "not-a-service-account", "project_id": "test-project",
+      "private_key": _FAKE_PRIVATE_KEY}, "wrong type"),
+    ({"project_id": "test-project", "private_key": _FAKE_PRIVATE_KEY},
+     "missing type"),
+    ({"type": "", "project_id": "test-project", "private_key": _FAKE_PRIVATE_KEY},
+     "empty type"),
+    ({"type": "service_account", "project_id": "", "private_key": _FAKE_PRIVATE_KEY},
+     "empty project_id"),
+    ({"type": "service_account", "project_id": "test-project", "private_key": ""},
+     "empty private_key"),
+])
+def test_fcm_config_post_rejects_invalid_json(client, db, bad_json, reason):
+    resp = client.post("/api/v1/admin/mobile/fcm-config",
+                       json={"service_account_json": bad_json})
+    assert resp.status_code == 422, reason
+    # A rejected save stores nothing.
+    assert db.query(MobileFcmConfig).count() == 0
+
+
+@pytest.mark.parametrize("bad_value", [
+    "not-a-dict",
+    ["service_account"],
+    42,
+    None,
+])
+def test_fcm_config_post_rejects_non_dict(client, db, bad_value):
+    resp = client.post("/api/v1/admin/mobile/fcm-config",
+                       json={"service_account_json": bad_value})
+    assert resp.status_code == 422
+    assert db.query(MobileFcmConfig).count() == 0
+
+
+def test_fcm_config_post_missing_field(client, db):
+    # service_account_json itself is required.
+    assert client.post("/api/v1/admin/mobile/fcm-config", json={}).status_code == 422
+    assert db.query(MobileFcmConfig).count() == 0
+
+
+def test_fcm_config_post_twice_replaces(client, db):
+    first = _fake_service_account("test-project")
+    assert client.post("/api/v1/admin/mobile/fcm-config",
+                       json={"service_account_json": first}).status_code == 200
+
+    second = _fake_service_account("test-project-2")
+    resp = client.post("/api/v1/admin/mobile/fcm-config",
+                       json={"service_account_json": second})
+    assert resp.status_code == 200
+    assert resp.json() == {"configured": True, "project_id": "test-project-2"}
+
+    # Upsert, not a second row: exactly one config, holding the new key.
+    rows = db.query(MobileFcmConfig).all()
+    assert len(rows) == 1
+    assert rows[0].project_id == "test-project-2"
+    assert json.loads(decrypt_api_key(rows[0].encrypted_service_account_json)) == second
+
+    got = client.get("/api/v1/admin/mobile/fcm-config")
+    assert got.json()["project_id"] == "test-project-2"
+    assert "FAKE-KEY-FOR-TESTS-ONLY" not in got.text
+
+
 def test_blocked_visitors_crud(client, db, test_organization):
     created = client.post("/api/v1/admin/mobile/blocked-visitors",
                           json={"ip_address": "203.0.113.9", "reason": "spam flood"})

@@ -46,7 +46,18 @@ const agentNames = ref<Record<string, string>>({})
 const selectedWidgetId = ref('')
 const loading = ref(true)
 const loadError = ref('')
-const fcmStatus = ref<{ configured: boolean; project_id: string | null } | null>(null)
+const fcmStatus = ref<{ configured: boolean; project_id: string | null; updated_at: string | null } | null>(null)
+const fcmKeyJson = ref('')
+const fcmSaving = ref(false)
+const fcmError = ref('')
+const fcmSuccess = ref('')
+
+const fcmUpdatedAt = computed(() => {
+  const raw = fcmStatus.value?.updated_at
+  if (!raw) return ''
+  const date = new Date(raw)
+  return Number.isNaN(date.getTime()) ? raw : date.toLocaleString()
+})
 const copyAiState = ref('Copy for AI')
 
 const selectedWidget = computed(
@@ -91,6 +102,65 @@ onMounted(async () => {
     fcmStatus.value = null
   }
 })
+
+// Refresh the FCM status from the server (never returns the stored key).
+const loadFcmStatus = async () => {
+  try {
+    const response = await api.get('/admin/mobile/fcm-config')
+    fcmStatus.value = response.data
+  } catch {
+    fcmStatus.value = null
+  }
+}
+
+// Validate pasted service-account JSON the same way the server does, so a
+// typo is caught here with a plain-words message instead of a bare 422.
+const parseFcmKey = (text: string): { key: Record<string, unknown> } | { error: string } => {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return { error: 'That is not valid JSON — paste the whole service-account JSON file contents.' }
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { error: 'The key must be a JSON object, starting with {"type": "service_account", ...}.' }
+  }
+  const key = parsed as Record<string, unknown>
+  if (key.type !== 'service_account') {
+    return { error: 'This is not a Firebase service-account key — the JSON must have "type": "service_account".' }
+  }
+  if (typeof key.project_id !== 'string' || !key.project_id.trim()) {
+    return { error: 'The JSON is missing "project_id".' }
+  }
+  if (typeof key.private_key !== 'string' || !key.private_key.trim()) {
+    return { error: 'The JSON is missing "private_key".' }
+  }
+  return { key }
+}
+
+const saveFcmKey = async () => {
+  fcmError.value = ''
+  fcmSuccess.value = ''
+  const result = parseFcmKey(fcmKeyJson.value)
+  if ('error' in result) {
+    fcmError.value = result.error
+    return
+  }
+  fcmSaving.value = true
+  try {
+    const response = await api.post('/admin/mobile/fcm-config', { service_account_json: result.key })
+    // Never echo the key back: clear the field and re-read the status.
+    fcmKeyJson.value = ''
+    fcmSuccess.value = `FCM key saved — push notifications are live for project ${response.data?.project_id ?? ''}.`
+    toast.success('FCM service account saved')
+    await loadFcmStatus()
+  } catch (err) {
+    const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+    fcmError.value = detail || 'Could not save the key. Check the JSON and try again.'
+  } finally {
+    fcmSaving.value = false
+  }
+}
 
 const copyForAi = async () => {
   try {
@@ -208,11 +278,39 @@ const sendExample = `curl -X POST ${apiBase}/mobile/conversations/<conversation_
               </span>
               <span v-if="fcmStatus === null" class="status-note">Status unavailable.</span>
               <span v-else-if="fcmStatus.configured" class="status-note">
-                Pushes go out for real (project {{ fcmStatus.project_id }}).
+                Pushes go out for real (project {{ fcmStatus.project_id }})<span v-if="fcmUpdatedAt"> — key saved {{ fcmUpdatedAt }}.</span>
               </span>
               <span v-else class="status-note">
                 Pushes are recorded, not sent. Add an FCM service account to send real pushes.
               </span>
+            </div>
+            <div class="fcm-key-form">
+              <label class="field-label" for="fcm-service-account">Firebase service account</label>
+              <p class="hint">
+                Paste the service-account JSON from the Firebase console — Project settings →
+                Service accounts → Generate new private key. It is stored encrypted and is never
+                shown back here; paste a new key any time to replace it.
+              </p>
+              <textarea
+                id="fcm-service-account"
+                v-model="fcmKeyJson"
+                class="fcm-key-textarea"
+                rows="6"
+                spellcheck="false"
+                placeholder='{"type": "service_account", "project_id": "your-project-id", "private_key": "-----BEGIN PRIVATE KEY-----\n...", ...}'
+              />
+              <p v-if="fcmError" class="error" role="alert">{{ fcmError }}</p>
+              <p v-if="fcmSuccess" class="success" role="status">{{ fcmSuccess }}</p>
+              <div class="fcm-key-actions">
+                <button
+                  class="action-btn primary"
+                  type="button"
+                  :disabled="fcmSaving || !fcmKeyJson.trim()"
+                  @click="saveFcmKey"
+                >
+                  {{ fcmSaving ? 'Saving…' : (fcmStatus?.configured ? 'Replace FCM key' : 'Save FCM key') }}
+                </button>
+              </div>
             </div>
           </template>
           <p v-else>No widgets yet — create one from an AI agent first.</p>
@@ -499,6 +597,42 @@ const sendExample = `curl -X POST ${apiBase}/mobile/conversations/<conversation_
 .status-note {
   font-size: 13px;
   opacity: 0.75;
+}
+
+/* FCM service-account key form, under the FCM status row. */
+.fcm-key-form {
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border-color);
+}
+
+.fcm-key-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-btn);
+  background: var(--background-soft);
+  color: inherit;
+  font-family: ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  resize: vertical;
+  margin-top: var(--space-sm);
+}
+
+.fcm-key-actions {
+  margin-top: var(--space-sm);
+}
+
+.action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.success {
+  color: var(--c-teal);
+  font-size: 13px;
 }
 
 .quick-steps li {
