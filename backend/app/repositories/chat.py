@@ -20,7 +20,7 @@ from app.models.channels import ChannelConversation
 from app.models.chat_history import ChatHistory
 from app.models.customer import Customer
 from uuid import UUID
-from sqlalchemy import func, or_, select, text, and_
+from sqlalchemy import cast, func, or_, select, String, text, and_
 from sqlalchemy.sql import case
 from app.models.agent import Agent
 from app.models.session_to_agent import SessionToAgent
@@ -37,6 +37,8 @@ from sqlalchemy.orm.attributes import set_committed_value
 from datetime import datetime, timezone
 from pydantic import BaseModel
 from app.services.file_storage import resolve_public_url
+from app.services.conversation_tagger import apply_tags_to_conversation
+from app.services import conversation_tags
 from app.services.sentiment import analyze_sentiment, compute_session_sentiment
 
 logger = get_logger(__name__)
@@ -70,6 +72,16 @@ def _readable_attributes(attributes: Optional[Dict[str, Any]]) -> Optional[Dict[
         return attributes
     return {**attributes,
             SENT_CHOICES_ATTRIBUTE: decode_sent_choices(attributes[SENT_CHOICES_ATTRIBUTE])}
+
+
+def _tag_like_pattern(tag: str) -> str:
+    """A LIKE pattern matching one exact slug inside the JSON tag list: the
+    slug quoted, as JSON stores it, with LIKE metacharacters escaped."""
+    quoted = f'"{tag}"'
+    escaped = "".join(
+        ("\\" + ch if ch in ("\\", "%", "_") else ch) for ch in quoted
+    )
+    return f"%{escaped}%"
 
 
 class ChatRepository:
@@ -146,6 +158,11 @@ class ChatRepository:
 
     def create_message(self, message_data: Dict[str, Any]) -> ChatHistory:
         """Create a new chat message."""
+        # Files sent with the message, when the caller knows them (every
+        # branch that stores a visitor message passes them; the files are
+        # still attached to the row afterwards for display). Only the
+        # tagger reads this key — it is popped before the row is built.
+        attachments = message_data.pop('attachments', None)
         try:
             # Convert any Pydantic models in attributes to dict
             if 'attributes' in message_data:
@@ -189,6 +206,24 @@ class ChatRepository:
                 except Exception as e:
                     logger.error(f"Error updating session sentiment: {str(e)}")
                 self._wake_snoozed(message_data['session_id'])
+
+                # Rule-based auto-tagging (app/services/conversation_tagger):
+                # the visitor's words add priority/payment/service tags to
+                # the conversation. Tagging never breaks storage — the
+                # helper itself never raises, and this is belt and braces.
+                try:
+                    apply_tags_to_conversation(
+                        self.db,
+                        session_id=message_data['session_id'],
+                        message_id=message.id,
+                        message_text=message_data.get('message') or '',
+                        attachments=attachments,
+                    )
+                except Exception as tag_err:
+                    logger.warning(
+                        "Conversation tagging skipped for session %s: %s",
+                        message_data['session_id'], tag_err,
+                    )
 
             return message
         except Exception as e:
@@ -558,6 +593,11 @@ class ChatRepository:
         last_activity = func.max(ChatHistory.created_at)
         if sort == inbox_views.InboxSort.NEWEST:
             return (last_activity.desc(),)
+        if sort == inbox_views.InboxSort.PRIORITY:
+            # The score is computed per row after the fetch (it needs the
+            # tags), so SQL only orders by latest activity; get_recent_chats
+            # re-sorts by score before returning.
+            return (last_activity.desc(),)
         if sort == inbox_views.InboxSort.WAITING_LONGEST:
             # A chat that waited from the start (an agent with AI replies off,
             # or one handed over before handed_over_at existed) waits from its
@@ -592,6 +632,7 @@ class ChatRepository:
         channel: Optional[str] = None,
         search: Optional[str] = None,
         sort: Optional[inbox_views.InboxSort] = None,
+        tag: Optional[str | List[str]] = None,
         current_user_id: Optional[str | UUID] = None,
         today_start: Optional[datetime] = None,
     ) -> List[dict]:
@@ -664,6 +705,24 @@ class ChatRepository:
             query = query.filter(SessionToAgent.channel == channel)
         if search:
             query = query.filter(inbox_views.search_clause(search))
+        if tag:
+            # A tag lives in the session's JSON tag list. Without the tags
+            # column no conversation can carry one, so the filter is empty.
+            # Several tags match when the conversation carries ANY of them
+            # (the inbox sends repeated ?tag= params, one per chip).
+            if not conversation_tags.tags_column_available():
+                return []
+            tag_slugs = [tag] if isinstance(tag, str) else list(tag)
+            query = query.filter(
+                or_(
+                    *(
+                        cast(SessionToAgent.tags, String).like(
+                            _tag_like_pattern(slug), escape="\\"
+                        )
+                        for slug in tag_slugs
+                    )
+                )
+            )
         
         # Filter by organization
         if organization_id:
@@ -708,15 +767,23 @@ class ChatRepository:
             SessionToAgent.user_id,
             User.full_name,
             SessionToAgent.session_id
-        ).order_by(*self._inbox_order(sort)).offset(skip).limit(limit)
+        ).order_by(*self._inbox_order(sort))
+        # Priority order needs the tags, which are only known after the
+        # fetch, so the whole filtered set is fetched and sliced in Python.
+        if sort == inbox_views.InboxSort.PRIORITY:
+            results = query.all()
+        else:
+            results = query.offset(skip).limit(limit).all()
 
-        results = query.all()
         # Previews are fetched for the returned page only. Inlining them as a
         # correlated subquery would evaluate once per session in the org, since the
         # LIMIT applies after grouping.
         last_messages = self.get_last_messages([r.session_id for r in results])
+        # Tags are fetched for the returned page only, the same way: one
+        # query for the page's sessions, not one per row.
+        tags_by_session = self._tags_for_sessions([r.session_id for r in results])
 
-        return [{
+        items = [{
             'customer': {
                 'id': r.customer_id,
                 'email': CustomerRepository.display_email(r.customer_email),
@@ -736,8 +803,35 @@ class ChatRepository:
             'title': r.title,
             'sentiment_label': r.sentiment_label,
             'snoozed_until': r.snoozed_until,
-            'session_id': r.session_id
+            'session_id': r.session_id,
+            'tags': tags_by_session.get(r.session_id, []),
+            'priority_score': conversation_tags.priority_score(
+                tags_by_session.get(r.session_id, [])),
         } for r in results]
+
+        if sort == inbox_views.InboxSort.PRIORITY:
+            # Heaviest tag first, then the latest activity.
+            items.sort(
+                key=lambda item: (item['priority_score'], item['updated_at']),
+                reverse=True,
+            )
+            items = items[skip:skip + limit]
+        return items
+
+    def _tags_for_sessions(self, session_ids: List) -> Dict:
+        """{session_id: [tag slugs]} for the given sessions; {} without the
+        tags column."""
+        if not session_ids or not conversation_tags.tags_column_available():
+            return {}
+        rows = (
+            self.db.query(SessionToAgent.session_id, SessionToAgent.tags)
+            .filter(SessionToAgent.session_id.in_(session_ids))
+            .all()
+        )
+        return {
+            row.session_id: conversation_tags.clean_tags(row.tags)
+            for row in rows
+        }
 
     async def check_session_access(
         self,

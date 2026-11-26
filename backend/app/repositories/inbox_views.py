@@ -49,6 +49,10 @@ class InboxView(str, Enum):
 class InboxSort(str, Enum):
     NEWEST = 'newest'
     WAITING_LONGEST = 'waiting_longest'
+    # Heaviest tag first, then the latest activity (see
+    # ChatRepository.get_recent_chats: the score is computed per row, so the
+    # final order is applied in Python after the page is fetched).
+    PRIORITY = 'priority'
 
 
 def not_closed() -> ColumnElement:

@@ -19,13 +19,14 @@ limitations under the License.
  * One conversation in the inbox list: who, which channel, when, what about,
  * and who has it. Two lines of text and a row of chips, about 76px tall.
  */
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import type { Conversation } from '@/types/chat'
 import { getInitials } from '@/utils/text'
 import { channelGlyph } from '@/utils/channelGlyphs'
 import { navIconSvg } from '@/components/layout/navIcons'
 import { formatBadgeCount } from '@/utils/badgeCount'
 import { avatarTone, customerName, rowChips } from './inboxPresentation'
+import { useConversationTags } from '@/composables/useConversationTags'
 import { elapsedLabel } from './inboxTime'
 
 const props = defineProps<{
@@ -47,6 +48,16 @@ const unreadLabel = computed(() => formatBadgeCount(props.unread))
 const unreadHint = computed(() =>
   props.unread ? `, ${props.unread} unread` : ''
 )
+
+/** The conversation's tags, as pills beside the AI badge (three at most). */
+const { tagLabel, tagPillStyle, ensureTags } = useConversationTags()
+const tagSlugs = computed(() => props.conversation.tags ?? [])
+const shownTags = computed(() => tagSlugs.value.slice(0, 3))
+const hiddenTagCount = computed(() => Math.max(0, tagSlugs.value.length - shownTags.value.length))
+// Only a tagged row asks for the definitions: an untagged list costs nothing
+onMounted(() => {
+  if (tagSlugs.value.length) void ensureTags()
+})
 
 const CHIP_ICONS: Record<string, string> = { waiting: 'clock', negative: 'frown', snoozed: 'clock' }
 </script>
@@ -88,6 +99,19 @@ const CHIP_ICONS: Record<string, string> = { waiting: 'clock', negative: 'frown'
           <span v-if="chip.kind === 'ai' || chip.kind === 'person'" class="chip-dot" aria-hidden="true"></span>
           <span v-if="CHIP_ICONS[chip.kind]" class="chip-icon" aria-hidden="true" v-html="navIconSvg(CHIP_ICONS[chip.kind], 11)"></span>
           {{ chip.text }}
+        </span>
+        <span
+          v-for="slug in shownTags"
+          :key="`tag-${slug}`"
+          class="tag-pill"
+          :style="tagPillStyle(slug)"
+          :title="`Tagged ${tagLabel(slug)}`"
+        >
+          <span class="tag-dot" aria-hidden="true"></span>
+          {{ tagLabel(slug) }}
+        </span>
+        <span v-if="hiddenTagCount" class="tag-pill tag-more" :title="`${hiddenTagCount} more tags`">
+          +{{ hiddenTagCount }}
         </span>
         <span class="spacer"></span>
         <span v-if="unreadLabel" class="unread-count" aria-hidden="true">{{ unreadLabel }}</span>
@@ -270,6 +294,34 @@ const CHIP_ICONS: Record<string, string> = { waiting: 'clock', negative: 'frown'
 
 .chip-icon {
   display: inline-flex;
+}
+
+/* A tag pill: the tag's colour as a tint, beside the AI badge */
+.tag-pill {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--o10);
+  background: var(--o04);
+  color: var(--text2);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tag-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tag-dot, currentColor);
+}
+
+.tag-more {
+  color: var(--muted);
 }
 
 .chip-closed,

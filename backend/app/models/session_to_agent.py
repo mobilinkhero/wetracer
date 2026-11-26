@@ -98,6 +98,12 @@ class SessionToAgent(Base):
     sentiment_label = Column(String, nullable=True)  # Overall session sentiment: 'positive', 'neutral', 'negative'
     sentiment_score = Column(Float, nullable=True)  # Overall average sentiment score: -1.0 to 1.0
 
+    # AI-assigned conversation tags (app/services/tag_taxonomy.py): a JSON list
+    # of tag slugs, e.g. ["payment-received", "urgent"]. [] until the tagger
+    # runs; the inbox sorts by the highest tag weight. JSON, not a join table —
+    # the taxonomy is small and fixed, and tags are read with the session row.
+    tags = Column(JSON, default=list)
+
     # Workflow-related fields
     workflow_id = Column(UUID(as_uuid=True), ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True)
     current_node_id = Column(UUID(as_uuid=True), ForeignKey("workflow_nodes.id", ondelete="SET NULL"), nullable=True)

@@ -220,6 +220,10 @@ class ChatOverviewResponse(BaseModel):
     sentiment_label: Optional[str] = None
     snoozed_until: Optional[datetime] = None
     session_id: UUID
+    # The AI/team tags on this conversation, and its priority: the heaviest
+    # tag's weight, 0 with none.
+    tags: List[str] = []
+    priority_score: int = 0
 
 
 class InboxCountsResponse(BaseModel):

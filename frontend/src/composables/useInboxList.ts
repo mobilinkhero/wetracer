@@ -67,6 +67,8 @@ export function useInboxList() {
   const sort = ref<InboxSort>(defaultSort(selection.value))
   const search = ref('')
   const filters = ref<InboxFilterValues>({ agentId: '', assigneeId: '' })
+  /** The tag filter: conversations carrying any of these (empty: no tag filter) */
+  const selectedTags = ref<string[]>([])
   const conversations = ref<Conversation[]>([])
   const counts = ref<InboxCounts | null>(null)
   const loading = ref(true)
@@ -110,6 +112,7 @@ export function useInboxList() {
       q: query || undefined,
       agent_id: filters.value.agentId || undefined,
       user_id: filters.value.assigneeId || undefined,
+      tag: selectedTags.value.length ? [...selectedTags.value] : undefined,
       sort: sort.value,
       today_start: localDayStart(),
       skip,
@@ -199,6 +202,7 @@ export function useInboxList() {
     // A search left over from the last view would show "No conversations
     // match" beside the new view's count
     search.value = ''
+    selectedTags.value = []
     selection.value = next
     sort.value = defaultSort(next)
     linkView(selectionId(next))
@@ -211,6 +215,7 @@ export function useInboxList() {
     sort.value = preset.sort
     search.value = preset.search
     filters.value = { agentId: preset.agentId, assigneeId: preset.assigneeId }
+    selectedTags.value = []
     activePresetId.value = item.id
     linkView(item.id)
   }
@@ -240,10 +245,10 @@ export function useInboxList() {
     conversations.value = next
   }
 
-  watch([selection, sort, filters], () => void load())
+  watch([selection, sort, filters, selectedTags], () => void load())
 
   /** A search or a filter narrows the view: its count no longer describes the list */
-  const narrowed = computed(() => !!search.value.trim() || !!filters.value.agentId || !!filters.value.assigneeId)
+  const narrowed = computed(() => !!search.value.trim() || !!filters.value.agentId || !!filters.value.assigneeId || selectedTags.value.length > 0)
 
   let searchTimer: ReturnType<typeof setTimeout> | null = null
   watch(search, () => {
@@ -278,6 +283,7 @@ export function useInboxList() {
     sort,
     search,
     filters,
+    selectedTags,
     narrowed,
     conversations,
     counts,

@@ -1559,7 +1559,11 @@ Keep your responses concise and focused. Provide clear, actionable information i
                     "organization_id": org_id,
                     "agent_id": agent_id,
                     "customer_id": customer_id,
-                    "attributes": {**(user_attributes or {}), **guardrail_verdict.as_attributes()}
+                    "attributes": {**(user_attributes or {}), **guardrail_verdict.as_attributes()},
+                    # Read by the auto-tagger only (payment proof needs to
+                    # know a file came with the message); popped before
+                    # the row is built.
+                    "attachments": attachments,
                 })
 
                 # Files uploaded with this message belong to it, whether a
@@ -1837,7 +1841,11 @@ Keep your responses concise and focused. Provide clear, actionable information i
                     "organization_id": org_id,
                     "agent_id": agent_id,
                     "customer_id": customer_id,
-                    "attributes": {**(user_attributes or {}), **guardrail_verdict.as_attributes()}
+                    "attributes": {**(user_attributes or {}), **guardrail_verdict.as_attributes()},
+                    # Read by the auto-tagger only (payment proof needs to
+                    # know a file came with the message); popped before
+                    # the row is built.
+                    "attachments": attachments,
                 })
                 if attachments:
                     self._attach_files_to_message(db, user_msg.id, attachments,

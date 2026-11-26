@@ -26,6 +26,7 @@ import { toast } from 'vue-sonner'
 import type { ChatDetail, ConversationNote, Message } from '@/types/chat'
 import type { Teammate } from '@/services/users'
 import { chatService } from '@/services/chat'
+import { tagsService } from '@/services/tags'
 import { ticketService } from '@/services/tickets'
 import { userService } from '@/services/user'
 import { useConversationChat } from '@/composables/useConversationChat'
@@ -170,6 +171,30 @@ const assign = (userId: string) => {
 
 const releaseToAi = () =>
   run(() => chatService.releaseToAi(props.chat.session_id), `Handed back to ${agentName.value}`)
+
+// ---- Tags ----
+// Toggling a tag in the header: the server answers with the new tags and
+// priority score; where it says nothing, the change is worked out here, and
+// the list re-reads the score on its next poll anyway
+async function toggleTag(slug: string) {
+  const applied = (props.chat.tags ?? []).includes(slug)
+  try {
+    const result = applied
+      ? await tagsService.removeConversationTag(props.chat.session_id, slug)
+      : await tagsService.addConversationTag(props.chat.session_id, slug)
+    const tags = result.tags ?? (applied
+      ? (props.chat.tags ?? []).filter((t) => t !== slug)
+      : [...(props.chat.tags ?? []), slug])
+    emit('chat-updated', {
+      ...props.chat,
+      tags,
+      priority_score: result.priority_score ?? props.chat.priority_score,
+    })
+  } catch (err: any) {
+    console.error(err)
+    toast.error(err?.response?.data?.detail || 'The tag could not be changed. Try again.')
+  }
+}
 
 // Taking a chat over silences the AI and tells the customer a person joined:
 // asked first, so a stray click on a busy inbox can't do it
@@ -376,6 +401,7 @@ defineExpose({ requestClose })
       @action="onAction"
       @toggle-details="emit('toggle-details')"
       @back="emit('back')"
+      @toggle-tag="toggleTag"
     >
       <template v-if="hasEnterpriseModule" #tools>
         <InboxThreadTools :chat="chat" :now="now" :may-change-hands="mayChangeHands" @chat-updated="onChatUpdated" />

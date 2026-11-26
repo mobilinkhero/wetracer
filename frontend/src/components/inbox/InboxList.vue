@@ -20,11 +20,13 @@ limitations under the License.
  * sorted, a search over customers, and the rows, loading more as you scroll.
  * Below 1024px the views pane folds into the picker at the top.
  */
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Conversation, InboxSort } from '@/types/chat'
 import { navIconSvg } from '@/components/layout/navIcons'
+import { useConversationTags } from '@/composables/useConversationTags'
 import ConversationRow from './ConversationRow.vue'
 import InboxFilters, { type InboxFilterValues } from './InboxFilters.vue'
+import TagFilterChips from './TagFilterChips.vue'
 import type { InboxViewGroup, InboxViewItem } from './inboxViews'
 
 const props = defineProps<{
@@ -57,6 +59,12 @@ const props = defineProps<{
 const sort = defineModel<InboxSort>('sort', { required: true })
 const search = defineModel<string>('search', { required: true })
 const filters = defineModel<InboxFilterValues>('filters', { required: true })
+/** The tag filter's selection; the list re-reads when it changes */
+const selectedTags = defineModel<string[]>('selectedTags', { default: () => [] })
+
+/** The tag definitions for the filter chips (shared with the rows) */
+const { definitions: tagDefinitions, ensureTags } = useConversationTags()
+onMounted(() => void ensureTags())
 
 const emit = defineEmits<{
   (e: 'select', sessionId: string): void
@@ -100,7 +108,7 @@ watch(() => props.selectedSessionId, async (id) => {
 })
 
 // Another view, sort, search or filter is a new list: start it at the top
-watch([() => props.view.id, sort, search, filters], () => {
+watch([() => props.view.id, sort, search, filters, selectedTags], () => {
   if (rowsEl.value) rowsEl.value.scrollTop = 0
 })
 
@@ -127,6 +135,7 @@ defineExpose({ focusSearch })
         <label class="sort">
           <span class="visually-hidden">Sort</span>
           <select v-model="sort" class="sort-select">
+            <option value="priority">Priority</option>
             <option value="newest">Newest</option>
             <option value="waiting_longest">Waiting longest</option>
           </select>
@@ -190,6 +199,11 @@ defineExpose({ focusSearch })
         :teammates="filterTeammates"
       />
       </div>
+      <TagFilterChips
+        v-if="tagDefinitions.length"
+        v-model:selected="selectedTags"
+        :tags="tagDefinitions"
+      />
     </div>
 
     <div ref="rowsEl" class="rows" aria-live="polite" :aria-busy="loading">

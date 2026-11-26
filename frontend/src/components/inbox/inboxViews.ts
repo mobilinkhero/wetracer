@@ -124,9 +124,9 @@ export function parseSelection(id: unknown): InboxSelection {
   return id in VIEW_DEFS ? { view: id as InboxViewKey, channel: null } : DEFAULT_SELECTION
 }
 
-/** Waiting views list the longest wait first; everything else the newest. */
+/** Priority first — the inbox opens on what needs attention; the waiting view still lists the longest wait first. */
 export const defaultSort = (selection: InboxSelection): InboxSort =>
-  selection.view === 'waiting' ? 'waiting_longest' : 'newest'
+  selection.view === 'waiting' ? 'waiting_longest' : 'priority'
 
 function viewItem(view: InboxViewKey, counts: InboxCounts | null): InboxViewItem {
   const def = VIEW_DEFS[view]

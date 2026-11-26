@@ -52,10 +52,10 @@ describe('inbox views', () => {
     expect(parseSelection(['mine'])).toEqual(DEFAULT_SELECTION)
   })
 
-  it('lists the waiting queue longest-waiting first, everything else newest first', () => {
+  it('lists the waiting queue longest-waiting first, everything else priority first', () => {
     expect(defaultSort({ view: 'waiting', channel: null })).toBe('waiting_longest')
-    expect(defaultSort({ view: 'mine', channel: null })).toBe('newest')
-    expect(defaultSort({ view: 'open', channel: 'web' })).toBe('newest')
+    expect(defaultSort({ view: 'mine', channel: null })).toBe('priority')
+    expect(defaultSort({ view: 'open', channel: 'web' })).toBe('priority')
   })
 
   it('groups the views with their counts, channels busiest first', () => {

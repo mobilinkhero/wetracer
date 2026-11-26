@@ -33,6 +33,8 @@ interface ChatParams {
   /** Customer name, email or phone */
   q?: string
   sort?: InboxSort
+  /** Only conversations carrying one of these tags (repeated ?tag=) */
+  tag?: string[]
   /** Where "today" starts for resolved_by_ai: the viewer's local midnight */
   today_start?: string
 }
@@ -60,7 +62,8 @@ export const chatService = {
     const embedded = isEmbeddedShopify()
     
     const endpoint = embedded ? '/chats/recent/shopify' : '/chats/recent'
-    const response = await api.get(endpoint, { params })
+    // Repeated ?tag=a&tag=b (indexes: null): the backend reads `tag` as a list
+    const response = await api.get(endpoint, { params, paramsSerializer: { indexes: null } })
     return response.data as Conversation[]
   },
 

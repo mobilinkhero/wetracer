@@ -338,6 +338,15 @@ app.include_router(
     tags=["mobile-admin"]
 )
 
+# Admin API for conversation tags (tag definitions, per-conversation add /
+# remove). Dashboard auth only, org-scoped inside the router.
+from app.api import conversation_tags
+app.include_router(
+    conversation_tags.router,
+    prefix=f"{settings.API_V1_STR}/admin",
+    tags=["conversation-tags"]
+)
+
 app.include_router(
     widget_frame.router,
     prefix=f"{settings.API_V1_STR}/widgets",

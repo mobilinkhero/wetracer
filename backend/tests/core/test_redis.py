@@ -17,6 +17,22 @@ limitations under the License.
 import pytest
 from unittest.mock import patch, MagicMock
 
+import app.core.redis as redis_module
+
+
+@pytest.fixture(autouse=True)
+def _restore_redis_client():
+    """`init_redis()` assigns the module-global `redis_client`, and the
+    @patch decorators on these tests restore `redis` and `settings` but
+    not that global — so a MagicMock client would leak into every later
+    test in the session (e.g. `mobile_security.is_temp_banned()` then
+    returns True for everything and all mobile calls 403). Snapshot it
+    here and put it back afterwards, whatever the test did."""
+    previous = redis_module.redis_client
+    yield
+    redis_module.redis_client = previous
+
+
 @patch('app.core.redis.redis')
 @patch('app.core.redis.settings')
 def test_init_redis_disabled(mock_settings, mock_redis):

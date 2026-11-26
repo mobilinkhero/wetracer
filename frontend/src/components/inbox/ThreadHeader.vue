@@ -27,6 +27,7 @@ import { chatHandler } from '@/utils/chatState'
 import { getInitials } from '@/utils/text'
 import { navIconSvg } from '@/components/layout/navIcons'
 import ActionMenu, { type ActionMenuItem } from '@/components/common/ActionMenu.vue'
+import ConversationTagsMenu from './ConversationTagsMenu.vue'
 import { customerName } from './inboxPresentation'
 
 const props = defineProps<{
@@ -47,6 +48,8 @@ const emit = defineEmits<{
   (e: 'action', id: string): void
   (e: 'toggle-details'): void
   (e: 'back'): void
+  /** A tag was picked in the tags menu: add it, or remove it if it is on */
+  (e: 'toggle-tag', slug: string): void
 }>()
 
 const name = computed(() => customerName(props.chat.customer))
@@ -98,6 +101,8 @@ const assigneeLabel = computed(() =>
 
       <!-- More tools for the conversation (the enterprise module's Snooze) -->
       <slot name="tools" />
+
+      <ConversationTagsMenu :tags="chat.tags ?? []" @toggle="emit('toggle-tag', $event)" />
 
       <button
         v-if="canClose"

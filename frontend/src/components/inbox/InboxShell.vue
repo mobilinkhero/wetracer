@@ -197,6 +197,8 @@ function onChatUpdated(chat: ChatDetail) {
     user_name: chat.user_name,
     group_id: chat.group_id,
     handed_over_at: chat.handed_over_at,
+    tags: chat.tags,
+    priority_score: chat.priority_score,
   })
 }
 
@@ -287,6 +289,7 @@ useInboxShortcuts({
         v-model:sort="list.sort.value"
         v-model:search="list.search.value"
         v-model:filters="list.filters.value"
+        v-model:selected-tags="list.selectedTags.value"
         :narrowed="list.narrowed.value"
         :filter-agents="filterAgents"
         :filter-teammates="filterTeammates"

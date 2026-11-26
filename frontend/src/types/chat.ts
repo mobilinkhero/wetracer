@@ -110,7 +110,7 @@ export interface ConversationNote {
   created_at: string
 }
 
-export type InboxSort = 'newest' | 'waiting_longest'
+export type InboxSort = 'newest' | 'waiting_longest' | 'priority'
 
 export type SentimentLabel = 'positive' | 'neutral' | 'negative'
 
@@ -146,6 +146,10 @@ export interface Conversation {
   sentiment_label?: SentimentLabel | null
   /** Out of the views until then (or until the customer writes) */
   snoozed_until?: string | null
+  /** AI- or team-added tags (slugs from GET /admin/tags) */
+  tags?: string[]
+  /** The tags' combined weight: the priority sort orders by this first */
+  priority_score?: number
   attributes?: {
     message_type?: string
     shopify_output?: {
@@ -189,6 +193,10 @@ export interface ChatDetail {
   sentiment_label?: SentimentLabel | null
   title?: string | null
   snoozed_until?: string | null
+  /** AI- or team-added tags (slugs from GET /admin/tags) */
+  tags?: string[]
+  /** The tags' combined weight: the priority sort orders by this first */
+  priority_score?: number
   /** Minutes your sent reply stays editable here; null: the channel can't change a sent message */
   message_edit_minutes?: number | null
   /** The team's notes, apart from `messages` (what the customer saw) */

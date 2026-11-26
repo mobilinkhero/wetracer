@@ -77,12 +77,12 @@ afterEach(() => {
 })
 
 describe('useInboxList', () => {
-  it("loads All open, newest first, with the viewer's day start, and every view's count", async () => {
+  it("loads All open, priority first, with the viewer's day start, and every view's count", async () => {
     const { result, wrapper } = host(useInboxList)
     await flushPromises()
 
     expect(chat.getRecentChats).toHaveBeenCalledWith({
-      view: 'open', channel: undefined, q: undefined, agent_id: undefined, user_id: undefined, sort: 'newest',
+      view: 'open', channel: undefined, q: undefined, agent_id: undefined, user_id: undefined, sort: 'priority',
       today_start: '2026-11-13T00:00:00.000Z', skip: 0, limit: INBOX_PAGE_SIZE,
     })
     expect(result().conversations.value).toHaveLength(2)
@@ -310,7 +310,7 @@ describe('useInboxList', () => {
       const { result, wrapper } = host(useInboxList)
       await flushPromises()
       chat.getRecentChats.mockClear()
-      result().setPresets([preset('saved:3', { selection: { view: 'open', channel: null }, sort: 'newest', search: '', agentId: '' })])
+      result().setPresets([preset('saved:3', { selection: { view: 'open', channel: null }, sort: 'priority', search: '', agentId: '' })])
       result().markPreset('saved:3')
       await flushPromises()
       expect(result().selectedId.value).toBe('saved:3')

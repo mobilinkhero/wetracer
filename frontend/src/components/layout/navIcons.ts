@@ -63,6 +63,7 @@ export const NAV_ICONS: Record<string, string> = {
     bolt: '<path d="M13 3L5 14h6l-1 7 8-11h-6z"/>',
     bookmark: '<path d="M6 4h12v16l-6-4-6 4z"/>',
     filter: '<path d="M4 6h16M7 12h10M10 18h4"/>',
+    tag: '<path d="M3.5 3.5h7L21 14l-7 7L3.5 10.5z"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/>',
     keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
 }
 

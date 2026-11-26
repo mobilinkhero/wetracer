@@ -785,6 +785,10 @@ async def send_message(
             "agent_id": session.agent_id,
             "customer_id": customer_id,
             "user_id": session.user_id,
+            # Read by the auto-tagger only (payment proof needs to know
+            # a file came with the message); popped before the row is
+            # built.
+            "attachments": uploaded_files,
         })
         if uploaded_files:
             for file_info in uploaded_files:

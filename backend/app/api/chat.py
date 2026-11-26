@@ -17,11 +17,12 @@ limitations under the License.
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Union
 from datetime import datetime
 from app.models.schemas.chat import ChatOverviewResponse, ChatDetailResponse, InboxCountsResponse
 from app.core.auth import get_current_user, require_permissions, get_unified_chat_auth
 from app.services.shopify_session import require_shopify_or_jwt_auth
+from app.services import conversation_tags
 from app.models.user import User
 from app.database import get_db
 from app.repositories.chat import ChatRepository
@@ -62,6 +63,18 @@ def _checked_status_filter(value: Optional[str]) -> Optional[str]:
     if unknown:
         raise HTTPException(status_code=422, detail=f"Unknown status: {', '.join(unknown)}")
     return value
+
+
+def _checked_tag_filter(value: Optional[Union[str, List[str]]]) -> Optional[List[str]]:
+    """Tag slugs, or None. Anything else is refused here: compared with
+    the JSON tag list it would only ever match nothing."""
+    if not value:
+        return None
+    values = [value] if isinstance(value, str) else list(value)
+    unknown = [slug for slug in values if not conversation_tags.is_valid_tag(slug)]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown tag: {', '.join(unknown)}")
+    return values
 
 
 def _inbox_scope(auth_info: dict) -> dict:
@@ -121,12 +134,14 @@ async def get_recent_chats(
     channel: Optional[str] = Query(None, max_length=32, description="Only this channel ('web', 'whatsapp', ...)"),
     q: Optional[str] = Query(None, max_length=100, description="Customer name, email, phone or custom data (an order number) containing this"),
     sort: Optional[InboxSort] = Query(None, description="newest, or waiting_longest; by default waiting chats come first"),
+    tag: Optional[List[str]] = Query(None, max_length=64, description="Only conversations carrying any of these tags (repeat ?tag= for more)"),
     today_start: Optional[datetime] = Query(None, description=TODAY_START_HELP),
     auth_info: dict = Depends(get_unified_chat_auth),
     db: Session = Depends(get_db)
 ):
     """Get recent chats - supports both JWT and Shopify session token auth"""
     status = _checked_status_filter(status)
+    tag = _checked_tag_filter(tag)
     try:
         # Off the event loop: a sync query here stalls every socket and request
         return await run_in_threadpool(
@@ -135,6 +150,7 @@ async def get_recent_chats(
             channel=channel,
             search=q.strip() if q and q.strip() else None,
             sort=sort,
+            tag=tag,
             current_user_id=auth_info.get('user_id'),
             today_start=today_start,
             skip=skip,
