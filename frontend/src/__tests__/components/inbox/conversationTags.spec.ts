@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { nextTick } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defaultSort, inboxViewGroups, selectedViewItem } from '@/components/inbox/inboxViews'
 import InboxList from '@/components/inbox/InboxList.vue'
@@ -22,6 +23,7 @@ import ConversationRow from '@/components/inbox/ConversationRow.vue'
 import TagFilterChips from '@/components/inbox/TagFilterChips.vue'
 import ConversationTagsMenu from '@/components/inbox/ConversationTagsMenu.vue'
 import ThreadHeader from '@/components/inbox/ThreadHeader.vue'
+import { visiblePillCount } from '@/components/inbox/tagPillFit'
 import { tagsService } from '@/services/tags'
 import { ensureTags, resetTagsForTests, useConversationTags } from '@/composables/useConversationTags'
 import type { TagDefinition } from '@/types/tags'
@@ -130,26 +132,74 @@ describe('TagFilterChips', () => {
   const mountChips = (selected: string[] = []) =>
     mount(TagFilterChips, { props: { tags: DEFS, selected } })
 
-  it('shows the tags grouped by what they are about', () => {
+  it('is collapsed by default, with a Filter by tag button and no chips', () => {
     const wrapper = mountChips()
-    expect(wrapper.findAll('.tag-chip').map((c) => c.text())).toEqual([
-      'Payment received', 'Urgent', 'VIP', 'SIM Owner Details',
+    expect(wrapper.find('.filter-toggle').text()).toContain('Filter by tag')
+    expect(wrapper.find('.tag-panel').exists()).toBe(false)
+    expect(wrapper.find('.tag-chip').exists()).toBe(false)
+  })
+
+  it('expands to one label line per group, with Service behind More tags', async () => {
+    const wrapper = mountChips()
+    await wrapper.find('.filter-toggle').trigger('click')
+    expect(wrapper.findAll('.group-label').map((g) => g.text())).toEqual([
+      'Payment', 'Priority', 'Customer',
     ])
+    expect(wrapper.findAll('.tag-chip').map((c) => c.text())).toEqual([
+      'Payment received', 'Urgent', 'VIP',
+    ])
+    expect(wrapper.find('.more-tags').text()).toContain('More tags')
+    await wrapper.find('.more-tags').trigger('click')
     expect(wrapper.findAll('.group-label').map((g) => g.text())).toEqual([
       'Payment', 'Priority', 'Customer', 'Service',
     ])
+    expect(wrapper.findAll('.tag-chip').map((c) => c.text())).toEqual([
+      'Payment received', 'Urgent', 'VIP', 'SIM Owner Details',
+    ])
   })
 
-  it('toggles one chip on and off, and clears them all', async () => {
+  it('collapses again when the toggle is clicked', async () => {
     const wrapper = mountChips()
+    await wrapper.find('.filter-toggle').trigger('click')
+    expect(wrapper.find('.tag-panel').exists()).toBe(true)
+    await wrapper.find('.filter-toggle').trigger('click')
+    expect(wrapper.find('.tag-panel').exists()).toBe(false)
+  })
+
+  it('shows how many tags are selected, and clears them', async () => {
+    const wrapper = mountChips(['urgent', 'vip'])
+    expect(wrapper.find('.count-badge').text()).toBe('2 selected')
+    expect(wrapper.find('.clear').exists()).toBe(true)
+    await wrapper.find('.clear').trigger('click')
+    expect(wrapper.emitted('update:selected')).toEqual([[[]]])
+  })
+
+  it('toggles one chip on and off', async () => {
+    const wrapper = mountChips()
+    await wrapper.find('.filter-toggle').trigger('click')
     await wrapper.findAll('.tag-chip')[1].trigger('click')
     expect(wrapper.emitted('update:selected')).toEqual([[['urgent']]])
 
     const selected = mountChips(['urgent', 'vip'])
+    await selected.find('.filter-toggle').trigger('click')
     await selected.findAll('.tag-chip')[1].trigger('click')
     expect(selected.emitted('update:selected')).toEqual([[['vip']]])
-    await selected.find('.clear').trigger('click')
-    expect(selected.emitted('update:selected')?.[1]).toEqual([[]])
+  })
+})
+
+describe('visiblePillCount', () => {
+  it('keeps every pill that fits', () => {
+    expect(visiblePillCount([100, 180, 240], 260, 3)).toBe(3)
+  })
+
+  it('drops pills past the edge, leaving room for +N', () => {
+    expect(visiblePillCount([200, 300, 420], 260, 4)).toBe(1)
+    expect(visiblePillCount([100, 200, 280], 260, 3)).toBe(2)
+  })
+
+  it('shows none when even one pill does not fit', () => {
+    expect(visiblePillCount([300], 260, 1)).toBe(0)
+    expect(visiblePillCount([], 260, 0)).toBe(0)
   })
 })
 
@@ -167,6 +217,37 @@ describe('ConversationRow tags', () => {
     expect(wrapper.find('.chip-ai').text()).toBe('AI · Shop assistant')
     const pills = wrapper.findAll('.tag-pill')
     expect(pills.map((p) => p.text())).toEqual(['Payment received', 'Urgent', 'SIM Owner Details', '+1'])
+  })
+
+  it('shows only the pills that fit, and the rest behind +N', async () => {
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      if (this.classList.contains('chips')) return { right: 260 } as DOMRect
+      if (this.classList.contains('tag-pill')) {
+        const right: Record<string, number> = {
+          'Payment received': 200,
+          Urgent: 300,
+          'SIM Owner Details': 420,
+        }
+        return { right: right[this.textContent?.trim() ?? ''] ?? 0 } as DOMRect
+      }
+      return { right: 0 } as DOMRect
+    })
+    try {
+      const wrapper = mount(ConversationRow, {
+        props: {
+          conversation: conversation({ tags: ['payment-received', 'urgent', 'sim-owner-details', 'vip'] }),
+          active: false,
+          currentUserId: 'me',
+          now: NOW,
+        },
+      })
+      await flushPromises()
+      await nextTick()
+      await nextTick()
+      expect(wrapper.findAll('.tag-pill').map((p) => p.text())).toEqual(['Payment received', '+3'])
+    } finally {
+      rect.mockRestore()
+    }
   })
 
   it('shows nothing extra on an untagged conversation, and the slug for an unknown tag', async () => {
@@ -263,6 +344,9 @@ describe('InboxList tags and priority sort', () => {
     expect(wrapper.find('.sort-select').findAll('option').map((o) => o.attributes('value'))).toEqual([
       'priority', 'newest', 'waiting_longest',
     ])
+    expect(wrapper.find('.sort-select').findAll('option').map((o) => o.text())).toEqual([
+      'Sort: Priority', 'Sort: Newest', 'Sort: Waiting longest',
+    ])
     await wrapper.find('.sort-select').setValue('newest')
     expect(wrapper.emitted('update:sort')).toEqual([['newest']])
   })
@@ -270,7 +354,9 @@ describe('InboxList tags and priority sort', () => {
   it('filters by tag chips, and reports the selection', async () => {
     const wrapper = mountList()
     await flushPromises()
-    expect(wrapper.findAll('.tag-chip').length).toBe(4)
+    expect(wrapper.findAll('.tag-chip').length).toBe(0)
+    await wrapper.find('.filter-toggle').trigger('click')
+    expect(wrapper.findAll('.tag-chip').length).toBe(3)
     await wrapper.findAll('.tag-chip')[0].trigger('click')
     expect(wrapper.emitted('update:selectedTags')).toEqual([[['payment-received']]])
   })

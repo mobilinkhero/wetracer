@@ -135,9 +135,9 @@ defineExpose({ focusSearch })
         <label class="sort">
           <span class="visually-hidden">Sort</span>
           <select v-model="sort" class="sort-select">
-            <option value="priority">Priority</option>
-            <option value="newest">Newest</option>
-            <option value="waiting_longest">Waiting longest</option>
+            <option value="priority">Sort: Priority</option>
+            <option value="newest">Sort: Newest</option>
+            <option value="waiting_longest">Sort: Waiting longest</option>
           </select>
           <span class="sort-chevron" aria-hidden="true" v-html="navIconSvg('chevronDown', 12)"></span>
         </label>

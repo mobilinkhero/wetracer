@@ -19,7 +19,7 @@ limitations under the License.
  * One conversation in the inbox list: who, which channel, when, what about,
  * and who has it. Two lines of text and a row of chips, about 76px tall.
  */
-import { computed, onMounted } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Conversation } from '@/types/chat'
 import { getInitials } from '@/utils/text'
 import { channelGlyph } from '@/utils/channelGlyphs'
@@ -27,6 +27,7 @@ import { navIconSvg } from '@/components/layout/navIcons'
 import { formatBadgeCount } from '@/utils/badgeCount'
 import { avatarTone, customerName, rowChips } from './inboxPresentation'
 import { useConversationTags } from '@/composables/useConversationTags'
+import { visiblePillCount } from './tagPillFit'
 import { elapsedLabel } from './inboxTime'
 
 const props = defineProps<{
@@ -49,14 +50,64 @@ const unreadHint = computed(() =>
   props.unread ? `, ${props.unread} unread` : ''
 )
 
-/** The conversation's tags, as pills beside the AI badge (three at most). */
-const { tagLabel, tagPillStyle, ensureTags } = useConversationTags()
+/** The conversation's tags, as pills beside the AI badge: three at most, fewer when they don't fit. */
+const { tagLabel, tagPillStyle, ensureTags, loaded: tagsLoaded } = useConversationTags()
 const tagSlugs = computed(() => props.conversation.tags ?? [])
-const shownTags = computed(() => tagSlugs.value.slice(0, 3))
-const hiddenTagCount = computed(() => Math.max(0, tagSlugs.value.length - shownTags.value.length))
+const MAX_SHOWN_TAGS = 3
+const visibleTagCount = ref(Math.min(MAX_SHOWN_TAGS, tagSlugs.value.length))
+const shownTags = computed(() => tagSlugs.value.slice(0, visibleTagCount.value))
+const hiddenTagCount = computed(() => Math.max(0, tagSlugs.value.length - visibleTagCount.value))
+
+const chipsEl = ref<HTMLElement | null>(null)
+let fitObserver: ResizeObserver | null = null
+let lastChipsWidth = 0
+
+/**
+ * Shrink the pills to what fits, so none is cut off at the row's edge and
+ * the "+N" pill is always visible. A row that isn't laid out (tests) keeps
+ * the three-pill cap.
+ */
+function fitTags(): void {
+  const el = chipsEl.value
+  if (!el) return
+  const right = el.getBoundingClientRect().right
+  if (right === 0) return
+  const unread = el.querySelector('.unread-count') as HTMLElement | null
+  const reserve = unread ? unread.offsetWidth + 4 : 0
+  const edges = [...el.querySelectorAll<HTMLElement>('.tag-pill:not(.tag-more)')]
+    .map((pill) => pill.getBoundingClientRect().right)
+  const count = visiblePillCount(edges, right, tagSlugs.value.length, 34, reserve)
+  if (count !== visibleTagCount.value) visibleTagCount.value = count
+}
+
+function resetAndFit(): void {
+  visibleTagCount.value = Math.min(MAX_SHOWN_TAGS, tagSlugs.value.length)
+  void nextTick(() => fitTags())
+}
+
 // Only a tagged row asks for the definitions: an untagged list costs nothing
 onMounted(() => {
   if (tagSlugs.value.length) void ensureTags()
+  lastChipsWidth = chipsEl.value?.clientWidth ?? 0
+  void nextTick(() => fitTags())
+  // A wider pane fits more pills again; a narrower one fewer. Content
+  // changes don't resize the row, so only a width change refits.
+  if (typeof ResizeObserver !== 'undefined' && chipsEl.value) {
+    fitObserver = new ResizeObserver(() => {
+      const width = chipsEl.value?.clientWidth ?? 0
+      if (width !== lastChipsWidth) {
+        lastChipsWidth = width
+        resetAndFit()
+      }
+    })
+    fitObserver.observe(chipsEl.value)
+  }
+})
+onBeforeUnmount(() => fitObserver?.disconnect())
+watch(tagSlugs, () => resetAndFit())
+// The pills change width once the definitions load (slugs become labels): refit then.
+watch(tagsLoaded, (isLoaded) => {
+  if (isLoaded) resetAndFit()
 })
 
 const CHIP_ICONS: Record<string, string> = { waiting: 'clock', negative: 'frown', snoozed: 'clock' }
@@ -89,7 +140,7 @@ const CHIP_ICONS: Record<string, string> = { waiting: 'clock', negative: 'frown'
         <span v-if="conversation.title && preview" class="sep"> · </span>
         <span class="preview">{{ preview }}</span>
       </span>
-      <span class="chips">
+      <span ref="chipsEl" class="chips">
         <span
           v-for="chip in chips"
           :key="chip.kind"
